@@ -56,7 +56,9 @@ jobs:
           TAG="${{ steps.release_date.outputs.value }}"
           if gh release view "$TAG" --repo "${{ github.repository }}" > /dev/null 2>&1; then
             echo "Deleting existing release $TAG..."
-            gh release delete "$TAG" --repo "${{ github.repository }}" --yes --cleanup-tag
+            gh release delete "$TAG" --repo "${{ github.repository }}" --yes
+            # The git tag may not exist if the previous run failed early; ignore the error.
+            gh api -X DELETE "repos/${{ github.repository }}/git/refs/tags/$TAG" 2>/dev/null || true
           else
             echo "No existing release for $TAG, nothing to delete."
           fi

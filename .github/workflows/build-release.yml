@@ -1,0 +1,103 @@
+name: Build and Release Tatoeba DaDb
+
+on:
+  schedule:
+    - cron: "0 4 * * 1" # Every Monday at 04:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: ".python-version"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Build all DaDb dictionaries (without tags)
+        run: |
+          # Deliberately omit --include-tags so noisy Tatoeba tags are excluded.
+          uv run tatoeba_to_dadb.py --delete-unzipped
+
+      - name: Verify output exists
+        run: |
+          shopt -s nullglob
+          files=(out/*.zip)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No zip files were generated in out/."
+            exit 1
+          fi
+          printf 'Generated files:\n%s\n' "${files[*]}"
+
+          - name: Extract index files for update checks
+          run: |
+            python - <<'PY'
+            import json
+            import pathlib
+            import zipfile
+
+            out_dir = pathlib.Path("out")
+            indexes_dir = out_dir / "indexes"
+            indexes_dir.mkdir(parents=True, exist_ok=True)
+
+            zip_files = sorted(out_dir.glob("*.zip"))
+            if not zip_files:
+              raise SystemExit("No zip files found in out/.")
+
+            extracted = 0
+            for zpath in zip_files:
+              with zipfile.ZipFile(zpath) as zf:
+                names = zf.namelist()
+                index_candidates = [n for n in names if n.endswith("index.json")]
+                if not index_candidates:
+                  raise SystemExit(f"No index.json found in {zpath.name}")
+
+                # Prefer a root-level index.json if present.
+                index_name = "index.json" if "index.json" in index_candidates else sorted(index_candidates)[0]
+                data = zf.read(index_name)
+
+              # Name index files predictably for client-side polling.
+              # dict_jpn.zip -> index_jpn.json
+              lang_part = zpath.stem[5:] if zpath.stem.startswith("dict_") else zpath.stem
+              target = indexes_dir / f"index_{lang_part}.json"
+              target.write_bytes(data)
+
+              # Validate JSON content so bad artifacts fail early.
+              json.loads(data)
+              extracted += 1
+
+            if extracted == 0:
+              raise SystemExit("No index files extracted.")
+
+            print(f"Extracted {extracted} index file(s) to {indexes_dir}")
+            PY
+
+      - name: Compute release date
+        id: release_date
+        run: |
+          echo "value=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
+      - name: Create or update GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release_date.outputs.value }}
+          name: Tatoeba DaDb ${{ steps.release_date.outputs.value }}
+          files: |
+            out/*.zip
+            out/indexes/*.json
+          generate_release_notes: true
+          make_latest: true
+          fail_on_unmatched_files: true

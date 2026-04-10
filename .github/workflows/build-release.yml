@@ -90,6 +90,18 @@ jobs:
         run: |
           echo "value=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
 
+      - name: Delete existing same-day release if present
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.release_date.outputs.value }}"
+          if gh release view "$TAG" --repo "${{ github.repository }}" > /dev/null 2>&1; then
+            echo "Deleting existing release $TAG..."
+            gh release delete "$TAG" --repo "${{ github.repository }}" --yes --cleanup-tag
+          else
+            echo "No existing release for $TAG, nothing to delete."
+          fi
+
       - name: Create or update GitHub release
         uses: softprops/action-gh-release@v2
         with:

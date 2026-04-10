@@ -25,11 +25,14 @@ def download_data(include_tags):
     os.makedirs(TMP_DIR, exist_ok=True)
     one_day_seconds = 24 * 60 * 60
     
+    _last_reported = [-1]
     def progress_hook(count, block_size, total_size):
         if total_size > 0:
             percent = min(100, int(count * block_size * 100 / total_size))
-            sys.stdout.write(f"\r   -> Downloading: {percent}%")
-            sys.stdout.flush()
+            # Print each new percent value once.
+            if percent != _last_reported[0]:
+                _last_reported[0] = percent
+                print(f"   -> Downloading: {percent}%")
 
     targets = {
         os.path.join(TMP_DIR, "sentences_detailed.tar.bz2"): BASE_URL + "sentences_detailed.tar.bz2",

@@ -61,14 +61,29 @@ jobs:
             echo "No existing release for $TAG, nothing to delete."
           fi
 
-      - name: Create GitHub release
+      - name: Create GitHub release (dict zips)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.release_date.outputs.value }}
           name: Tatoeba DaDb ${{ steps.release_date.outputs.value }}
-          files: |
-            out/*.zip
-            out/indexes/*.json
+          files: out/*.zip
           generate_release_notes: true
           make_latest: true
           fail_on_unmatched_files: true
+
+      - name: Upload index files (batched to avoid rate limits)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.release_date.outputs.value }}"
+          BATCH=20
+          count=0
+          for f in out/indexes/index_*.json; do
+            gh release upload "$TAG" "$f" --repo "${{ github.repository }}" --clobber
+            count=$((count + 1))
+            if [ $((count % BATCH)) -eq 0 ]; then
+              echo "Uploaded $count files, pausing to respect rate limits..."
+              sleep 10
+            fi
+          done
+          echo "Done uploading $count index file(s)."

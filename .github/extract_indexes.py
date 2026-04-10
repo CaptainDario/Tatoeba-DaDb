@@ -21,14 +21,11 @@ for zpath in zip_files:
         if not candidates:
             print(f"No index.json found in {zpath.name}", file=sys.stderr)
             sys.exit(1)
-        # Prefer a root-level index.json if present.
         entry = "index.json" if "index.json" in candidates else sorted(candidates)[0]
         data = zf.read(entry)
 
-    # Validate JSON before writing.
-    json.loads(data)
+    json.loads(data)  # validate
 
-    # dict_jpn.zip -> index_jpn.json
     lang = zpath.stem[5:] if zpath.stem.startswith("dict_") else zpath.stem
     (indexes_dir / f"index_{lang}.json").write_bytes(data)
     extracted += 1

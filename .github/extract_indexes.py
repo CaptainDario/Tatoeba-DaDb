@@ -27,6 +27,9 @@ for zpath in zip_files:
     json.loads(data)  # validate
 
     lang = zpath.stem[5:] if zpath.stem.startswith("dict_") else zpath.stem
+    if lang == "\\N":  # Tatoeba null/unknown language code
+        print(f"Skipping invalid language code: {lang}")
+        continue
     (indexes_dir / f"index_{lang}.json").write_bytes(data)
     extracted += 1
 

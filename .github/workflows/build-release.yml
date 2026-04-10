@@ -76,16 +76,17 @@ jobs:
       - name: Upload index files (batched to avoid rate limits)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
         run: |
           TAG="${{ steps.release_date.outputs.value }}"
           BATCH=20
           count=0
-          for f in out/indexes/index_*.json; do
+          while IFS= read -r -d '' f; do
             gh release upload "$TAG" "$f" --repo "${{ github.repository }}" --clobber
             count=$((count + 1))
             if [ $((count % BATCH)) -eq 0 ]; then
               echo "Uploaded $count files, pausing to respect rate limits..."
               sleep 10
             fi
-          done
+          done < <(find out/indexes -name 'index_*.json' -print0)
           echo "Done uploading $count index file(s)."

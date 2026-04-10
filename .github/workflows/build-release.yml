@@ -42,53 +42,12 @@ jobs:
           fi
           printf 'Generated files:\n%s\n' "${files[*]}"
 
-          - name: Extract index files for update checks
-          run: |
-            python3 - <<'PY'
-            import json
-            import pathlib
-            import zipfile
-
-            out_dir = pathlib.Path("out")
-            indexes_dir = out_dir / "indexes"
-            indexes_dir.mkdir(parents=True, exist_ok=True)
-
-            zip_files = sorted(out_dir.glob("*.zip"))
-            if not zip_files:
-              raise SystemExit("No zip files found in out/.")
-
-            extracted = 0
-            for zpath in zip_files:
-              with zipfile.ZipFile(zpath) as zf:
-                names = zf.namelist()
-                index_candidates = [n for n in names if n.endswith("index.json")]
-                if not index_candidates:
-                  raise SystemExit(f"No index.json found in {zpath.name}")
-
-                # Prefer a root-level index.json if present.
-                index_name = "index.json" if "index.json" in index_candidates else sorted(index_candidates)[0]
-                data = zf.read(index_name)
-
-              # Name index files predictably for client-side polling.
-              # dict_jpn.zip -> index_jpn.json
-              lang_part = zpath.stem[5:] if zpath.stem.startswith("dict_") else zpath.stem
-              target = indexes_dir / f"index_{lang_part}.json"
-              target.write_bytes(data)
-
-              # Validate JSON content so bad artifacts fail early.
-              json.loads(data)
-              extracted += 1
-
-            if extracted == 0:
-              raise SystemExit("No index files extracted.")
-
-            print(f"Extracted {extracted} index file(s) to {indexes_dir}")
-            PY
+      - name: Extract index files for update checks
+        run: python3 .github/extract_indexes.py
 
       - name: Compute release date
         id: release_date
-        run: |
-          echo "value=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+        run: echo "value=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
 
       - name: Delete existing same-day release if present
         env:
@@ -102,7 +61,7 @@ jobs:
             echo "No existing release for $TAG, nothing to delete."
           fi
 
-      - name: Create or update GitHub release
+      - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.release_date.outputs.value }}

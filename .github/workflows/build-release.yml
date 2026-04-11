@@ -92,15 +92,30 @@ jobs:
           TAG="${{ steps.release_date.outputs.value }}"
           mapfile -d '' files < <(find out -maxdepth 1 -name '*.zip' -print0; find out/indexes -name 'index_*.json' -print0)
           total=${#files[@]}
-          echo "Uploading $total file(s) in batches..."
-          BATCH=50
-          for ((i=0; i<total; i+=BATCH)); do
-            batch=("${files[@]:i:BATCH}")
-            echo "  -> batch $((i/BATCH + 1)): files $((i+1))-$((i+${#batch[@]})) of $total"
-            gh release upload "$TAG" "${batch[@]}" --repo "${{ github.repository }}" --clobber
-            # Pause between batches to stay within API rate limits
-            if (( i + BATCH < total )); then
-              sleep 2
-            fi
+          echo "Uploading $total file(s)..."
+          for ((i=0; i<total; i++)); do
+            f="${files[i]}"
+            echo "  [$$((i+1))/$total] $(basename "$f")"
+            for ((attempt=1; attempt<=10; attempt++)); do
+              if err=$(gh release upload "$TAG" "$f" \
+                        --repo "${{ github.repository }}" --clobber 2>&1); then
+                break
+              fi
+              if echo "$err" | grep -qi "rate limit\|403\|429"; then
+                # Honour retry-after if gh surfaces it, otherwise 60s (docs minimum)
+                wait=60
+                if ra=$(echo "$err" | grep -oP '(?i)retry.?after[: ]+\K[0-9]+'); then
+                  wait="$ra"
+                fi
+                echo "    Rate limited (attempt $attempt/10), waiting ${wait}s..."
+                sleep "$wait"
+              else
+                echo "    Error: $err"
+                [[ $attempt -eq 10 ]] && exit 1
+                sleep 5
+              fi
+            done
+            # 1s gap between uploads → ~60 req/min, safely under the 80/min content-creation limit
+            (( i + 1 < total )) && sleep 1
           done
           echo "Done."

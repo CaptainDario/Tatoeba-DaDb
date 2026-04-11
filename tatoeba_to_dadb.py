@@ -1,6 +1,7 @@
 import os
 import time
 import urllib.request
+import socket
 import tarfile
 import io
 import json
@@ -25,14 +26,43 @@ def download_data(include_tags):
     os.makedirs(TMP_DIR, exist_ok=True)
     one_day_seconds = 24 * 60 * 60
     
-    _last_reported = [-1]
-    def progress_hook(count, block_size, total_size):
-        if total_size > 0:
-            percent = min(100, int(count * block_size * 100 / total_size))
-            # Print each new percent value once.
-            if percent != _last_reported[0]:
-                _last_reported[0] = percent
-                print(f"   -> Downloading: {percent}%")
+    def download_with_retry(url, dest, retries=5, timeout=30, read_timeout=60):
+        """Download url to dest with per-chunk read timeout and automatic retries."""
+        CHUNK = 1024 * 64
+        for attempt in range(1, retries + 1):
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    total = int(resp.headers.get("Content-Length", 0))
+                    downloaded = 0
+                    last_pct = -1
+                    with open(dest, "wb") as out:
+                        while True:
+                            # Enforce a per-chunk read timeout so a stalled
+                            # server never blocks us indefinitely.
+                            orig = socket.getdefaulttimeout()
+                            socket.setdefaulttimeout(read_timeout)
+                            try:
+                                chunk = resp.read(CHUNK)
+                            finally:
+                                socket.setdefaulttimeout(orig)
+                            if not chunk:
+                                break
+                            out.write(chunk)
+                            downloaded += len(chunk)
+                            if total > 0:
+                                pct = min(100, int(downloaded * 100 / total))
+                                if pct != last_pct:
+                                    last_pct = pct
+                                    print(f"   -> Downloading: {pct}%")
+                return  # success
+            except (OSError, TimeoutError, socket.timeout) as exc:
+                print(f"   -> Attempt {attempt}/{retries} failed: {exc}")
+                if attempt == retries:
+                    raise
+                wait = 5 * attempt
+                print(f"   -> Retrying in {wait}s...")
+                time.sleep(wait)
 
     targets = {
         os.path.join(TMP_DIR, "sentences_detailed.tar.bz2"): BASE_URL + "sentences_detailed.tar.bz2",
@@ -41,7 +71,7 @@ def download_data(include_tags):
         os.path.join(TMP_DIR, "user_languages.tar.bz2"): BASE_URL + "user_languages.tar.bz2",
         os.path.join(TMP_DIR, "users_sentences.csv"): BASE_URL + "users_sentences.csv"
     }
-    
+
     if include_tags:
         targets[os.path.join(TMP_DIR, "tags.tar.bz2")] = BASE_URL + "tags.tar.bz2"
 
@@ -50,7 +80,7 @@ def download_data(include_tags):
             print(f"[CACHE] '{fname}' is valid.")
             continue
         print(f"[DOWNLOAD] Fetching '{fname}'...")
-        urllib.request.urlretrieve(url, fname, reporthook=progress_hook)
+        download_with_retry(url, fname)
         print()
 
 def stream_tar_bz2(filename):

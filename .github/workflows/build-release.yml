@@ -90,14 +90,9 @@ jobs:
         shell: bash
         run: |
           TAG="${{ steps.release_date.outputs.value }}"
-          BATCH=15
           count=0
           while IFS= read -r -d '' f; do
             gh release upload "$TAG" "$f" --repo "${{ github.repository }}" --clobber
             count=$((count + 1))
-            if [ $((count % BATCH)) -eq 0 ]; then
-              echo "Uploaded $count files, pausing to respect rate limits..."
-              sleep 15
-            fi
           done < <(find out -maxdepth 1 -name '*.zip' -print0; find out/indexes -name 'index_*.json' -print0)
           echo "Done uploading $count file(s)."

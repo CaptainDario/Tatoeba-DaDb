@@ -69,7 +69,7 @@ jobs:
         run: |
           gh release create "${{ steps.release_date.outputs.value }}" \
             --repo "${{ github.repository }}" \
-            --title "Tatoeba DaDb ${{ steps.release_date.outputs.value }}" \
+            --title "${{ steps.release_date.outputs.value }}" \
             --generate-notes \
             --latest
 

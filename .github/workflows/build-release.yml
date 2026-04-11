@@ -84,15 +84,13 @@ jobs:
             --notes-file out/release_notes.md \
             --latest
 
-      - name: Upload dict zips and index files (batched to avoid rate limits)
+      - name: Upload dict zips and index files
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           TAG="${{ steps.release_date.outputs.value }}"
-          count=0
-          while IFS= read -r -d '' f; do
-            gh release upload "$TAG" "$f" --repo "${{ github.repository }}" --clobber
-            count=$((count + 1))
-          done < <(find out -maxdepth 1 -name '*.zip' -print0; find out/indexes -name 'index_*.json' -print0)
-          echo "Done uploading $count file(s)."
+          mapfile -d '' files < <(find out -maxdepth 1 -name '*.zip' -print0; find out/indexes -name 'index_*.json' -print0)
+          echo "Uploading ${#files[@]} file(s)..."
+          gh release upload "$TAG" "${files[@]}" --repo "${{ github.repository }}" --clobber
+          echo "Done."

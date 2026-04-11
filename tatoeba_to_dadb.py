@@ -26,30 +26,49 @@ def download_data(include_tags):
     os.makedirs(TMP_DIR, exist_ok=True)
     one_day_seconds = 24 * 60 * 60
     
-    def download_with_retry(url, dest, retries=5, timeout=30, read_timeout=60):
-        """Download url to dest with per-chunk read timeout and automatic retries."""
+    def download_with_retry(url, dest, retries=10, connect_timeout=20,
+                            min_speed_bps=50 * 1024, speed_window=15):
+        """Resumable download with minimum-speed enforcement.
+
+        If throughput drops below `min_speed_bps` bytes/s for `speed_window`
+        consecutive seconds the chunk loop raises TimeoutError and the retry
+        logic resumes from the partial file using an HTTP Range request.
+        """
         CHUNK = 1024 * 64
         for attempt in range(1, retries + 1):
             try:
-                req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-                with urllib.request.urlopen(req, timeout=timeout) as resp:
-                    total = int(resp.headers.get("Content-Length", 0))
-                    downloaded = 0
+                resume_pos = os.path.getsize(dest) if os.path.exists(dest) else 0
+                headers = {"User-Agent": "Mozilla/5.0"}
+                if resume_pos:
+                    headers["Range"] = f"bytes={resume_pos}-"
+                req = urllib.request.Request(url, headers=headers)
+                with urllib.request.urlopen(req, timeout=connect_timeout) as resp:
+                    if resp.status == 200 and resume_pos:
+                        resume_pos = 0  # server ignored Range, restart
+                    total = resume_pos + int(resp.headers.get("Content-Length", 0))
+                    downloaded = resume_pos
                     last_pct = -1
-                    with open(dest, "wb") as out:
+                    window_start = time.monotonic()
+                    window_bytes = 0
+                    mode = "ab" if resume_pos else "wb"
+                    with open(dest, mode) as out:
                         while True:
-                            # Enforce a per-chunk read timeout so a stalled
-                            # server never blocks us indefinitely.
-                            orig = socket.getdefaulttimeout()
-                            socket.setdefaulttimeout(read_timeout)
-                            try:
-                                chunk = resp.read(CHUNK)
-                            finally:
-                                socket.setdefaulttimeout(orig)
+                            chunk = resp.read(CHUNK)
                             if not chunk:
                                 break
                             out.write(chunk)
                             downloaded += len(chunk)
+                            window_bytes += len(chunk)
+                            elapsed = time.monotonic() - window_start
+                            if elapsed >= speed_window:
+                                speed = window_bytes / elapsed
+                                if speed < min_speed_bps:
+                                    raise TimeoutError(
+                                        f"speed {speed/1024:.1f} KB/s below "
+                                        f"minimum {min_speed_bps//1024} KB/s"
+                                    )
+                                window_start = time.monotonic()
+                                window_bytes = 0
                             if total > 0:
                                 pct = min(100, int(downloaded * 100 / total))
                                 if pct != last_pct:
@@ -57,11 +76,12 @@ def download_data(include_tags):
                                     print(f"   -> Downloading: {pct}%")
                 return  # success
             except (OSError, TimeoutError, socket.timeout) as exc:
-                print(f"   -> Attempt {attempt}/{retries} failed: {exc}")
+                print(f"   -> Attempt {attempt}/{retries} failed at "
+                      f"{os.path.getsize(dest) if os.path.exists(dest) else 0} bytes: {exc}")
                 if attempt == retries:
                     raise
-                wait = 5 * attempt
-                print(f"   -> Retrying in {wait}s...")
+                wait = min(5 * attempt, 30)
+                print(f"   -> Resuming in {wait}s...")
                 time.sleep(wait)
 
     targets = {

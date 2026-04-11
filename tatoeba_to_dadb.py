@@ -191,7 +191,7 @@ def run_pipeline(target_langs, delete_unzipped, include_tags):
                     "sourceLanguage": lang,  # Identifying the bank's primary language
                     "isUpdatable": True,
                     "indexUrl": f"https://github.com/{GITHUB_USER}/{GITHUB_REPO}/releases/latest/download/index_{lang}.json",
-                    "downloadUrl": f"https://github.com/{GITHUB_USER}/{GITHUB_REPO}/releases/latest/download/dict_{lang}.zip"
+                    "downloadUrl": f"https://github.com/{GITHUB_USER}/{GITHUB_REPO}/releases/latest/download/tatoeba_dadb_{lang}.zip"
                 }, f, indent=2, ensure_ascii=False)
 
             with open(os.path.join(l_dir, "tag_bank_1.json"), "w", encoding="utf-8") as f:
@@ -240,7 +240,7 @@ def run_pipeline(target_langs, delete_unzipped, include_tags):
     for lang, state in lang_states.items():
         state["f"].write("\n]\n")
         state["f"].close()
-        z_path = os.path.join(OUT_DIR, f"dict_{lang}.zip")
+        z_path = os.path.join(OUT_DIR, f"tatoeba_dadb_{lang}.zip")
         with zipfile.ZipFile(z_path, 'w', zipfile.ZIP_DEFLATED) as zf:
             for root, _, files in os.walk(state["dir"]):
                 for file in files:

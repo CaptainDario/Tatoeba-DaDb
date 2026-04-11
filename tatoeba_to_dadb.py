@@ -170,6 +170,7 @@ def run_pipeline(target_langs, delete_unzipped, include_tags):
         if len(parts) < 4: continue
         
         sid, lang, text, user = int(parts[0]), parts[1], parts[2], parts[3]
+        if lang == r'\N': continue  # skip Tatoeba null/unknown language
         if target_langs and lang not in target_langs: continue
 
         if lang not in lang_states:

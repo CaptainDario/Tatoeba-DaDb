@@ -237,15 +237,22 @@ def run_pipeline(target_langs, delete_unzipped, include_tags):
 
     # Finalize files
     print("7. Zipping results...")
+    lang_counts = {}
     for lang, state in lang_states.items():
         state["f"].write("\n]\n")
         state["f"].close()
+        lang_counts[lang] = state["count"]
         z_path = os.path.join(OUT_DIR, f"tatoeba_dadb_{lang}.zip")
         with zipfile.ZipFile(z_path, 'w', zipfile.ZIP_DEFLATED) as zf:
             for root, _, files in os.walk(state["dir"]):
                 for file in files:
                     zf.write(os.path.join(root, file), os.path.relpath(os.path.join(root, file), state["dir"]))
         if delete_unzipped: shutil.rmtree(state["dir"])
+
+    stats_path = os.path.join(OUT_DIR, "stats.json")
+    with open(stats_path, "w", encoding="utf-8") as f:
+        json.dump(lang_counts, f, indent=2, ensure_ascii=False)
+    print(f"   Wrote sentence counts to {stats_path}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

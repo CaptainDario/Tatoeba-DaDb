@@ -45,6 +45,17 @@ jobs:
       - name: Extract index files for update checks
         run: python3 .github/extract_indexes.py
 
+      - name: Generate release notes
+        run: python3 .github/generate_release_notes.py
+
+      - name: Commit updated LANGUAGES.md
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add LANGUAGES.md
+          git diff --cached --quiet || git commit -m "chore: update LANGUAGES.md [skip ci]"
+          git push
+
       - name: Compute release date
         id: release_date
         run: echo "value=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
@@ -70,7 +81,7 @@ jobs:
           gh release create "${{ steps.release_date.outputs.value }}" \
             --repo "${{ github.repository }}" \
             --title "${{ steps.release_date.outputs.value }}" \
-            --generate-notes \
+            --notes-file out/release_notes.md \
             --latest
 
       - name: Upload dict zips and index files (batched to avoid rate limits)

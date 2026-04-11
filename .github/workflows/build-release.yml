@@ -63,30 +63,30 @@ jobs:
             echo "No existing release for $TAG, nothing to delete."
           fi
 
-      - name: Create GitHub release (dict zips)
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.release_date.outputs.value }}
-          name: Tatoeba DaDb ${{ steps.release_date.outputs.value }}
-          files: out/*.zip
-          generate_release_notes: true
-          make_latest: true
-          fail_on_unmatched_files: true
+      - name: Create GitHub release (empty, no assets yet)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.release_date.outputs.value }}" \
+            --repo "${{ github.repository }}" \
+            --title "Tatoeba DaDb ${{ steps.release_date.outputs.value }}" \
+            --generate-notes \
+            --latest
 
-      - name: Upload index files (batched to avoid rate limits)
+      - name: Upload dict zips and index files (batched to avoid rate limits)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           TAG="${{ steps.release_date.outputs.value }}"
-          BATCH=20
+          BATCH=15
           count=0
           while IFS= read -r -d '' f; do
             gh release upload "$TAG" "$f" --repo "${{ github.repository }}" --clobber
             count=$((count + 1))
             if [ $((count % BATCH)) -eq 0 ]; then
               echo "Uploaded $count files, pausing to respect rate limits..."
-              sleep 10
+              sleep 15
             fi
-          done < <(find out/indexes -name 'index_*.json' -print0)
-          echo "Done uploading $count index file(s)."
+          done < <(find out -maxdepth 1 -name '*.zip' -print0; find out/indexes -name 'index_*.json' -print0)
+          echo "Done uploading $count file(s)."

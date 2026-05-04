@@ -95,7 +95,7 @@ jobs:
           echo "Uploading $total file(s)..."
           for ((i=0; i<total; i++)); do
             f="${files[i]}"
-            echo "  [$$((i+1))/$total] $(basename "$f")"
+            echo "  [$((i+1))/$total] $(basename "$f")"
             for ((attempt=1; attempt<=10; attempt++)); do
               if err=$(gh release upload "$TAG" "$f" \
                         --repo "${{ github.repository }}" --clobber 2>&1); then

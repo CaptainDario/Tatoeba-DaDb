@@ -147,11 +147,22 @@ def parse_tags():
         parts = line.split('\t')
         if len(parts) >= 2:
             sid, tname = int(parts[0]), parts[1].strip()
-            # Basic noise filter for the brave
-            if len(tname) < 30 and not tname.lower().startswith("by "):
-                s_tags[sid].append(tname)
+            # Basic noise filter to exclude some trash tags
+            if check_bad_tag(tname):
+                if tname not in s_tags[sid]:
+                    s_tags[sid].append(tname)
                 unique_set.add(tname)
     return s_tags, unique_set
+
+def check_bad_tag(tag) -> bool:
+
+    if len(tag) > 30:
+        return False
+    
+    if tag.lower().startswith("by "):
+        return False
+
+    return True
 
 def parse_audio_meta():
     print("4. Parsing audio metadata...")
@@ -267,12 +278,19 @@ def run_pipeline(target_langs, delete_unzipped, include_tags):
         sk = skills.get((user, lang))
         if sk: stats.append({"statName": "user_skill", "value": int(sk) if sk.isdigit() else 0, "displayValue": str(sk)})
 
-        audios = [{"url": f"https://tatoeba.org/audio/download/{a['id']}", "tags": [t for t in [a['user'], a['lic']] if t]} for a in audio_meta.get(sid, [])]
+        # Deduplicate tags
+        audios = []
+        for a in audio_meta.get(sid, []):
+            a_tags = [t for t in [a['user'], a['lic']] if t]
+            audios.append({
+                "url": f"https://tatoeba.org/audio/download/{a['id']}",
+                "tags": list(dict.fromkeys(a_tags))
+            })
 
         obj = {
             "groupId": find_root(sid),
             "sentence": text,
-            "tags": sentence_tags.get(sid, []),
+            "tags": list(dict.fromkeys(sentence_tags.get(sid, []))),
             "stats": stats,
             "audios": audios
         }

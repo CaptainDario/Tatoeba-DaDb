@@ -27,12 +27,18 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked
 
-      - name: Build all DaDb example dictionaries
+      - name: Compute release date
+        id: release_date
+        run: echo "value=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
+      # ── Full top-25 release ──────────────────────────────────────────────────
+
+      - name: Build top-25 DaDb example dictionaries
         run: |
           # Deliberately omit --include-tags so noisy Tatoeba tags are excluded.
-          uv run tatoeba_to_dadb.py --delete-unzipped
+          uv run tatoeba_to_dadb.py --top 25 --delete-unzipped
 
-      - name: Verify output exists
+      - name: Verify output exists (full)
         run: |
           shopt -s nullglob
           files=(out/*.zip)
@@ -56,10 +62,6 @@ jobs:
           git diff --cached --quiet || git commit -m "chore: update LANGUAGES.md [skip ci]"
           git push
 
-      - name: Compute release date
-        id: release_date
-        run: echo "value=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
-
       - name: Delete existing same-day release if present
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -68,13 +70,12 @@ jobs:
           if gh release view "$TAG" --repo "${{ github.repository }}" > /dev/null 2>&1; then
             echo "Deleting existing release $TAG..."
             gh release delete "$TAG" --repo "${{ github.repository }}" --yes
-            # The git tag may not exist if the previous run failed early; ignore the error.
             gh api -X DELETE "repos/${{ github.repository }}/git/refs/tags/$TAG" 2>/dev/null || true
           else
             echo "No existing release for $TAG, nothing to delete."
           fi
 
-      - name: Create GitHub release (empty, no assets yet)
+      - name: Create full release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -84,10 +85,78 @@ jobs:
             --notes-file out/release_notes.md \
             --latest
 
-      - name: Upload dict zips and index files
+      - name: Upload full release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python3 .github/upload_assets.py \
             "${{ steps.release_date.outputs.value }}" \
+            "${{ github.repository }}"
+
+      # ── jpn-filtered top-25 release ─────────────────────────────────────────
+
+      - name: Save top-25 language list from stats
+        id: top25_langs
+        run: |
+          langs=$(python3 - <<'EOF'
+          import json, pathlib
+          counts = json.loads(pathlib.Path("out/stats.json").read_text())
+          ranked = sorted(counts, key=counts.__getitem__, reverse=True)[:25]
+          print(" ".join(ranked))
+          EOF
+          )
+          echo "value=$langs" >> "$GITHUB_OUTPUT"
+
+      - name: Clear output directory for jpn-filtered build
+        run: rm -rf out/
+
+      - name: Build jpn-filtered top-25 dictionaries
+        run: |
+          uv run tatoeba_to_dadb.py \
+            --langs ${{ steps.top25_langs.outputs.value }} \
+            --main jpn \
+            --delete-unzipped
+
+      - name: Verify output exists (jpn-filtered)
+        run: |
+          shopt -s nullglob
+          files=(out/*.zip)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No zip files were generated in out/."
+            exit 1
+          fi
+          printf 'Generated files:\n%s\n' "${files[*]}"
+
+      - name: Extract index files for jpn-filtered release
+        run: python3 .github/extract_indexes.py
+
+      - name: Delete existing same-day jpn release if present
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.release_date.outputs.value }}-main-jpn"
+          if gh release view "$TAG" --repo "${{ github.repository }}" > /dev/null 2>&1; then
+            echo "Deleting existing release $TAG..."
+            gh release delete "$TAG" --repo "${{ github.repository }}" --yes
+            gh api -X DELETE "repos/${{ github.repository }}/git/refs/tags/$TAG" 2>/dev/null || true
+          else
+            echo "No existing release for $TAG, nothing to delete."
+          fi
+
+      - name: Create jpn-filtered release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.release_date.outputs.value }}-main-jpn" \
+            --repo "${{ github.repository }}" \
+            --title "${{ steps.release_date.outputs.value }} (main: jpn)" \
+            --notes "Top-25 languages filtered to sentences with a Japanese translation." \
+            --latest=false
+
+      - name: Upload jpn-filtered release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 .github/upload_assets.py \
+            "${{ steps.release_date.outputs.value }}-main-jpn" \
             "${{ github.repository }}"

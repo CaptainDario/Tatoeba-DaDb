@@ -201,6 +201,18 @@ def build_translation_graph():
                 parent[root_u] = root_v
     return find
 
+def count_languages():
+    """Pre-pass: return a dict of {lang: sentence_count} for all languages."""
+    print("0. Counting sentences per language for top-N selection...")
+    counts = defaultdict(int)
+    for line in stream_tar_bz2(os.path.join(TMP_DIR, "sentences_detailed.tar.bz2")):
+        parts = line.split('\t')
+        if len(parts) < 2: continue
+        lang = parts[1]
+        if lang == r'\N': continue
+        counts[lang] += 1
+    return counts
+
 def collect_main_lang_groups(main_lang, find_root):
     """Pre-pass: return the set of group roots that contain at least one sentence in main_lang."""
     print(f"5b. Collecting translation groups for main language '{main_lang}'...")
@@ -216,9 +228,16 @@ def collect_main_lang_groups(main_lang, find_root):
 
 # --- MAIN ENGINE ---
 
-def run_pipeline(target_langs, main_lang, delete_unzipped, include_tags):
+def run_pipeline(target_langs, top_n, main_lang, delete_unzipped, include_tags):
     os.makedirs(OUT_DIR, exist_ok=True)
-    
+
+    # If --top is set and --langs is not, determine top N languages by sentence count
+    if top_n and not target_langs:
+        lang_counts = count_languages()
+        ranked = sorted(lang_counts.items(), key=lambda x: x[1], reverse=True)
+        target_langs = [lang for lang, _ in ranked[:top_n]]
+        print(f"   Top {top_n} languages selected: {', '.join(target_langs)}")
+
     # Run parsing steps
     skills = parse_user_skills()
     reviews = parse_user_reviews()
@@ -342,6 +361,7 @@ def run_pipeline(target_langs, main_lang, delete_unzipped, include_tags):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('-l', '--langs', nargs='+')
+    parser.add_argument('--top', type=int, default=None, help="Only process the top N most frequent languages (ignored when --langs is set)")
     parser.add_argument('--main', default=None, help="Main language code. Only sentences with a translation in this language are kept for other languages.")
     parser.add_argument('--delete-unzipped', action='store_true')
     parser.add_argument('--include-tags', action='store_true', help="Parse and include noisy Tatoeba tags")
@@ -351,11 +371,11 @@ if __name__ == "__main__":
     print("========================================")
     print("TATOEBA TO DAKANJI DICTIONARY BUILDER")
     print("========================================")
-    print(f"Target Languages: {', '.join(args.langs) if args.langs else 'ALL'}")
+    print(f"Target Languages: {', '.join(args.langs) if args.langs else f'top {args.top}' if args.top else 'ALL'}")
     print(f"Main Language:    {args.main if args.main else 'N/A (include all)'}")
     print(f"Include Tags:     {args.include_tags}")
     print(f"Delete Unzipped:  {args.delete_unzipped}\n")
     print("")
 
     download_data(args.include_tags)
-    run_pipeline(args.langs, args.main, args.delete_unzipped, args.include_tags)
+    run_pipeline(args.langs, args.top, args.main, args.delete_unzipped, args.include_tags)

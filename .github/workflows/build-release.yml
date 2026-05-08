@@ -112,8 +112,9 @@ jobs:
     needs: build-and-full-release
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        main_lang: [jpn, zho, kor]
+        main_lang: [jpn, cmn, kor]
 
     steps:
       - name: Checkout repository

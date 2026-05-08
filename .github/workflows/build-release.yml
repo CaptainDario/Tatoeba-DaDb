@@ -172,3 +172,18 @@ jobs:
             --latest=false
 
           python3 .github/upload_assets.py "$TAG" "${{ github.repository }}"
+
+      - name: Update stable latest tag (latest-main-${{ matrix.main_lang }})
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          STABLE_TAG="latest-main-${{ matrix.main_lang }}"
+          gh release delete "$STABLE_TAG" --repo "${{ github.repository }}" --yes 2>/dev/null || true
+          gh api -X DELETE "repos/${{ github.repository }}/git/refs/tags/$STABLE_TAG" 2>/dev/null || true
+          gh release create "$STABLE_TAG" \
+            --repo "${{ github.repository }}" \
+            --title "Latest (main: ${{ matrix.main_lang }})" \
+            --notes "Always points to the most recent ${{ matrix.main_lang }} release." \
+            --target main \
+            --latest=false
+          python3 .github/upload_assets.py "$STABLE_TAG" "${{ github.repository }}"

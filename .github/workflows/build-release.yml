@@ -9,8 +9,12 @@ permissions:
   contents: write
 
 jobs:
-  build-and-release:
+  # ── Full top-25 release ──────────────────────────────────────────────────────
+  build-and-full-release:
     runs-on: ubuntu-latest
+    outputs:
+      release_date: ${{ steps.release_date.outputs.value }}
+      top25_langs: ${{ steps.top25_langs.outputs.value }}
 
     steps:
       - name: Checkout repository
@@ -30,8 +34,6 @@ jobs:
       - name: Compute release date
         id: release_date
         run: echo "value=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
-
-      # ── Full top-25 release ──────────────────────────────────────────────────
 
       - name: Build top-25 DaDb example dictionaries
         run: |
@@ -93,8 +95,6 @@ jobs:
             "${{ steps.release_date.outputs.value }}" \
             "${{ github.repository }}"
 
-      # ── Filtered releases (jpn, zho, kor) ───────────────────────────────────
-
       - name: Save top-25 language list from stats
         id: top25_langs
         run: |
@@ -107,48 +107,67 @@ jobs:
           )
           echo "value=$langs" >> "$GITHUB_OUTPUT"
 
-      - name: Build and release filtered dicts for each main language
+  # ── Filtered releases (jpn, zho, kor) — run in parallel ─────────────────────
+  filtered-release:
+    needs: build-and-full-release
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        main_lang: [jpn, zho, kor]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: ".python-version"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Build and release filtered dict (main=${{ matrix.main_lang }})
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG_DATE="${{ steps.release_date.outputs.value }}"
-          TOP25="${{ steps.top25_langs.outputs.value }}"
+          TAG_DATE="${{ needs.build-and-full-release.outputs.release_date }}"
+          TOP25="${{ needs.build-and-full-release.outputs.top25_langs }}"
+          MAIN_LANG="${{ matrix.main_lang }}"
 
-          for MAIN_LANG in jpn zho kor; do
-            echo ""
-            echo "══ Building main-${MAIN_LANG} release ══"
+          echo "══ Building main-${MAIN_LANG} release ══"
 
-            rm -rf out/
+          uv run tatoeba_to_dadb.py \
+            --langs $TOP25 \
+            --main "$MAIN_LANG" \
+            --delete-unzipped
 
-            uv run tatoeba_to_dadb.py \
-              --langs $TOP25 \
-              --main "$MAIN_LANG" \
-              --delete-unzipped
+          shopt -s nullglob
+          files=(out/*.zip)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No zip files generated for main-${MAIN_LANG}."
+            exit 1
+          fi
+          printf 'Generated files:\n%s\n' "${files[*]}"
 
-            shopt -s nullglob
-            files=(out/*.zip)
-            if [ ${#files[@]} -eq 0 ]; then
-              echo "No zip files generated for main-${MAIN_LANG}."
-              exit 1
-            fi
-            printf 'Generated files:\n%s\n' "${files[*]}"
+          python3 .github/extract_indexes.py
+          python3 .github/generate_release_notes.py
 
-            python3 .github/extract_indexes.py
-            python3 .github/generate_release_notes.py
+          TAG="${TAG_DATE}-main-${MAIN_LANG}"
 
-            TAG="${TAG_DATE}-main-${MAIN_LANG}"
+          if gh release view "$TAG" --repo "${{ github.repository }}" > /dev/null 2>&1; then
+            echo "Deleting existing release $TAG..."
+            gh release delete "$TAG" --repo "${{ github.repository }}" --yes
+            gh api -X DELETE "repos/${{ github.repository }}/git/refs/tags/$TAG" 2>/dev/null || true
+          fi
 
-            if gh release view "$TAG" --repo "${{ github.repository }}" > /dev/null 2>&1; then
-              echo "Deleting existing release $TAG..."
-              gh release delete "$TAG" --repo "${{ github.repository }}" --yes
-              gh api -X DELETE "repos/${{ github.repository }}/git/refs/tags/$TAG" 2>/dev/null || true
-            fi
+          gh release create "$TAG" \
+            --repo "${{ github.repository }}" \
+            --title "${TAG_DATE} (main: ${MAIN_LANG})" \
+            --notes-file out/release_notes.md \
+            --latest=false
 
-            gh release create "$TAG" \
-              --repo "${{ github.repository }}" \
-              --title "${TAG_DATE} (main: ${MAIN_LANG})" \
-              --notes-file out/release_notes.md \
-              --latest=false
-
-            python3 .github/upload_assets.py "$TAG" "${{ github.repository }}"
-          done
+          python3 .github/upload_assets.py "$TAG" "${{ github.repository }}"

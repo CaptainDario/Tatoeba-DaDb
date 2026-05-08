@@ -93,7 +93,7 @@ jobs:
             "${{ steps.release_date.outputs.value }}" \
             "${{ github.repository }}"
 
-      # ── jpn-filtered top-25 release ─────────────────────────────────────────
+      # ── Filtered releases (jpn, zho, kor) ───────────────────────────────────
 
       - name: Save top-25 language list from stats
         id: top25_langs
@@ -107,59 +107,48 @@ jobs:
           )
           echo "value=$langs" >> "$GITHUB_OUTPUT"
 
-      - name: Clear output directory for jpn-filtered build
-        run: rm -rf out/
-
-      - name: Build jpn-filtered top-25 dictionaries
-        run: |
-          uv run tatoeba_to_dadb.py \
-            --langs ${{ steps.top25_langs.outputs.value }} \
-            --main jpn \
-            --delete-unzipped
-
-      - name: Verify output exists (jpn-filtered)
-        run: |
-          shopt -s nullglob
-          files=(out/*.zip)
-          if [ ${#files[@]} -eq 0 ]; then
-            echo "No zip files were generated in out/."
-            exit 1
-          fi
-          printf 'Generated files:\n%s\n' "${files[*]}"
-
-      - name: Extract index files for jpn-filtered release
-        run: python3 .github/extract_indexes.py
-
-      - name: Generate release notes for jpn-filtered release
-        run: python3 .github/generate_release_notes.py
-
-      - name: Delete existing same-day jpn release if present
+      - name: Build and release filtered dicts for each main language
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="${{ steps.release_date.outputs.value }}-main-jpn"
-          if gh release view "$TAG" --repo "${{ github.repository }}" > /dev/null 2>&1; then
-            echo "Deleting existing release $TAG..."
-            gh release delete "$TAG" --repo "${{ github.repository }}" --yes
-            gh api -X DELETE "repos/${{ github.repository }}/git/refs/tags/$TAG" 2>/dev/null || true
-          else
-            echo "No existing release for $TAG, nothing to delete."
-          fi
+          TAG_DATE="${{ steps.release_date.outputs.value }}"
+          TOP25="${{ steps.top25_langs.outputs.value }}"
 
-      - name: Create jpn-filtered release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release create "${{ steps.release_date.outputs.value }}-main-jpn" \
-            --repo "${{ github.repository }}" \
-            --title "${{ steps.release_date.outputs.value }} (main: jpn)" \
-            --notes-file out/release_notes.md \
-            --latest=false
+          for MAIN_LANG in jpn zho kor; do
+            echo ""
+            echo "══ Building main-${MAIN_LANG} release ══"
 
-      - name: Upload jpn-filtered release assets
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          python3 .github/upload_assets.py \
-            "${{ steps.release_date.outputs.value }}-main-jpn" \
-            "${{ github.repository }}"
+            rm -rf out/
+
+            uv run tatoeba_to_dadb.py \
+              --langs $TOP25 \
+              --main "$MAIN_LANG" \
+              --delete-unzipped
+
+            shopt -s nullglob
+            files=(out/*.zip)
+            if [ ${#files[@]} -eq 0 ]; then
+              echo "No zip files generated for main-${MAIN_LANG}."
+              exit 1
+            fi
+            printf 'Generated files:\n%s\n' "${files[*]}"
+
+            python3 .github/extract_indexes.py
+            python3 .github/generate_release_notes.py
+
+            TAG="${TAG_DATE}-main-${MAIN_LANG}"
+
+            if gh release view "$TAG" --repo "${{ github.repository }}" > /dev/null 2>&1; then
+              echo "Deleting existing release $TAG..."
+              gh release delete "$TAG" --repo "${{ github.repository }}" --yes
+              gh api -X DELETE "repos/${{ github.repository }}/git/refs/tags/$TAG" 2>/dev/null || true
+            fi
+
+            gh release create "$TAG" \
+              --repo "${{ github.repository }}" \
+              --title "${TAG_DATE} (main: ${MAIN_LANG})" \
+              --notes-file out/release_notes.md \
+              --latest=false
+
+            python3 .github/upload_assets.py "$TAG" "${{ github.repository }}"
+          done

@@ -311,7 +311,12 @@ def run_pipeline(target_langs, top_n, main_lang, delete_unzipped, include_tags):
         stats = []
         if sid in reviews: stats.append({"statName": "review_score", "value": reviews[sid]})
         sk = skills.get((user, lang))
-        if sk: stats.append({"statName": "user_skill", "value": int(sk) if sk.isdigit() else 0, "displayValue": str(sk)})
+        if sk:
+            skill_value = int(sk) if sk.isdigit() else 0
+            skill_entry = {"statName": "user_skill", "value": skill_value}
+            if str(skill_value) != str(sk):
+                skill_entry["displayValue"] = str(sk)
+            stats.append(skill_entry)
 
         # Deduplicate tags
         audios = []

@@ -155,7 +155,7 @@ jobs:
           printf 'Generated files:\n%s\n' "${files[*]}"
 
           python3 .github/extract_indexes.py
-          python3 .github/generate_release_notes.py
+          python3 .github/generate_release_notes.py --main-lang "${MAIN_LANG}"
 
           TAG="${TAG_DATE}-main-${MAIN_LANG}"
 

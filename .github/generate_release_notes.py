@@ -4,6 +4,7 @@ language overview to LANGUAGES.md at the repository root.
 The release notes show only the top TOP_N languages by sentence count.
 A link to LANGUAGES.md (on the main branch) is appended for the full list.
 """
+import argparse
 import json
 import pathlib
 import sys
@@ -11,45 +12,61 @@ import sys
 TOP_N = 100
 GITHUB_REPO = "CaptainDario/Tatoeba-DaDb"
 
-stats_path = pathlib.Path("out/stats.json")
-if not stats_path.exists():
-    print("out/stats.json not found.", file=sys.stderr)
-    sys.exit(1)
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--main-lang", help="Main language code if this is a filtered release")
+    args = parser.parse_args()
 
-counts: dict[str, int] = json.loads(stats_path.read_text(encoding="utf-8"))
-total_langs = len(counts)
-total_sentences = sum(counts.values())
+    stats_path = pathlib.Path("out/stats.json")
+    if not stats_path.exists():
+        print("out/stats.json not found.", file=sys.stderr)
+        sys.exit(1)
 
-ranked = sorted(counts.items(), key=lambda x: x[1], reverse=True)
-top = ranked[:TOP_N]
+    counts: dict[str, int] = json.loads(stats_path.read_text(encoding="utf-8"))
+    total_langs = len(counts)
+    total_sentences = sum(counts.values())
 
-# --- Full language overview written to repo root ---
-full_lines = [
-    "# Tatoeba DaDb - Language Overview\n",
-    f"**{total_langs} languages** · **{total_sentences:,} sentences** total\n",
-    "| # | Language | Sentences |",
-    "| ---: | --- | ---: |",
-]
-for i, (lang, n) in enumerate(ranked, 1):
-    full_lines.append(f"| {i} | `{lang}` | {n:,} |")
+    ranked = sorted(counts.items(), key=lambda x: x[1], reverse=True)
+    top = ranked[:TOP_N]
 
-pathlib.Path("LANGUAGES.md").write_text("\n".join(full_lines) + "\n", encoding="utf-8")
-print(f"Wrote full language overview ({total_langs} languages) to LANGUAGES.md")
+    # --- Full language overview written to repo root (only for full release) ---
+    if not args.main_lang:
+        full_lines = [
+            "# Tatoeba DaDb - Language Overview\n",
+            f"**{total_langs} languages** · **{total_sentences:,} sentences** total\n",
+            "| # | Language | Sentences |",
+            "| ---: | --- | ---: |",
+        ]
+        for i, (lang, n) in enumerate(ranked, 1):
+            full_lines.append(f"| {i} | `{lang}` | {n:,} |")
 
-# --- Release notes (top 100 only) ---
-full_url = f"https://github.com/{GITHUB_REPO}/blob/main/LANGUAGES.md"
+        pathlib.Path("LANGUAGES.md").write_text("\n".join(full_lines) + "\n", encoding="utf-8")
+        print(f"Wrote full language overview ({total_langs} languages) to LANGUAGES.md")
 
-note_lines = [
-    f"**{total_langs} languages** · **{total_sentences:,} sentences** total\n",
-    f"Top {TOP_N} languages by sentence count:\n",
-    "| # | Language | Sentences |",
-    "| ---: | --- | ---: |",
-]
-for i, (lang, n) in enumerate(top, 1):
-    note_lines.append(f"| {i} | `{lang}` | {n:,} |")
+    # --- Release notes (top 100 only) ---
+    full_url = f"https://github.com/{GITHUB_REPO}/blob/main/LANGUAGES.md"
 
-note_lines.append(f"\n[Full language list]({full_url})")
+    note_lines = []
+    if args.main_lang:
+        stable_url = f"https://github.com/{GITHUB_REPO}/releases/tag/latest-main-{args.main_lang}"
+        note_lines.append(f"**This is a filtered release for main language: `{args.main_lang}`**")
+        note_lines.append(f"Stable release URL: [{stable_url}]({stable_url})\n")
 
-notes = "\n".join(note_lines) + "\n"
-pathlib.Path("out/release_notes.md").write_text(notes, encoding="utf-8")
-print(f"Wrote release notes (top {TOP_N} languages) to out/release_notes.md")
+    note_lines.extend([
+        f"**{total_langs} languages** · **{total_sentences:,} sentences** total\n",
+        f"Top {TOP_N} languages by sentence count:\n",
+        "| # | Language | Sentences |",
+        "| ---: | --- | ---: |",
+    ])
+    for i, (lang, n) in enumerate(top, 1):
+        note_lines.append(f"| {i} | `{lang}` | {n:,} |")
+
+    note_lines.append(f"\n[Full language list]({full_url})")
+
+    notes = "\n".join(note_lines) + "\n"
+    pathlib.Path("out/release_notes.md").write_text(notes, encoding="utf-8")
+    print(f"Wrote release notes (top {TOP_N} languages) to out/release_notes.md")
+
+if __name__ == "__main__":
+    main()
+

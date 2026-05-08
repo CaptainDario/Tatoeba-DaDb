@@ -21,6 +21,7 @@ uv run tatoeba_to_dadb.py
 ### Command Line Arguments
 
 * `--langs` (`-l`): Space-separated list of the language codes (ISO 639-3) that should be extracted. If omitted, builds all languages.
+* `--main`: Can be used to specify a main language, this will be used to filter out examples from all other languages that do not have a translation in the specified `--main` language
 * `--delete-unzipped`: Delete the raw, unzipped dictionary folders in the output directory after they have been successfully packaged into `.zip` archives. (Defaults to keeping them).
 * `--include-tags`: Include tatoeba tag data (very low quality)
 

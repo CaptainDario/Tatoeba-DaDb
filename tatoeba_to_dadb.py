@@ -201,9 +201,22 @@ def build_translation_graph():
                 parent[root_u] = root_v
     return find
 
+def collect_main_lang_groups(main_lang, find_root):
+    """Pre-pass: return the set of group roots that contain at least one sentence in main_lang."""
+    print(f"5b. Collecting translation groups for main language '{main_lang}'...")
+    main_groups = set()
+    for line in stream_tar_bz2(os.path.join(TMP_DIR, "sentences_detailed.tar.bz2")):
+        parts = line.split('\t')
+        if len(parts) < 4: continue
+        sid, lang = int(parts[0]), parts[1]
+        if lang == main_lang:
+            main_groups.add(find_root(sid))
+    print(f"   Found {len(main_groups)} translation groups with '{main_lang}' sentences.")
+    return main_groups
+
 # --- MAIN ENGINE ---
 
-def run_pipeline(target_langs, delete_unzipped, include_tags):
+def run_pipeline(target_langs, main_lang, delete_unzipped, include_tags):
     os.makedirs(OUT_DIR, exist_ok=True)
     
     # Run parsing steps
@@ -212,6 +225,8 @@ def run_pipeline(target_langs, delete_unzipped, include_tags):
     sentence_tags, unique_tags = parse_tags() if include_tags else ({}, set())
     audio_meta, creators, licenses = parse_audio_meta()
     find_root = build_translation_graph()
+
+    main_groups = collect_main_lang_groups(main_lang, find_root) if main_lang else None
 
     # Create Tag Bank
     tag_bank = []
@@ -233,6 +248,7 @@ def run_pipeline(target_langs, delete_unzipped, include_tags):
         sid, lang, text, user = int(parts[0]), parts[1], parts[2], parts[3]
         if lang == r'\N': continue  # skip Tatoeba null/unknown language
         if target_langs and lang not in target_langs: continue
+        if main_groups is not None and lang != main_lang and find_root(sid) not in main_groups: continue
 
         if lang not in lang_states:
             l_dir = os.path.join(OUT_DIR, f"dict_{lang}")
@@ -260,7 +276,7 @@ def run_pipeline(target_langs, delete_unzipped, include_tags):
 
             f_chunk = open(os.path.join(l_dir, "example_bank_1.json"), "w", encoding="utf-8")
             f_chunk.write("[\n")
-            lang_states[lang] = {"f": f_chunk, "count": 0, "idx": 1, "dir": l_dir, "first": True}
+            lang_states[lang] = {"f": f_chunk, "count": 0, "total": 0, "idx": 1, "dir": l_dir, "first": True}
 
         state = lang_states[lang]
         if state["count"] >= CHUNK_SIZE:
@@ -299,6 +315,7 @@ def run_pipeline(target_langs, delete_unzipped, include_tags):
         state["f"].write("  " + json.dumps(obj, ensure_ascii=False))
         state["first"] = False
         state["count"] += 1
+        state["total"] += 1
         total_processed += 1
         if total_processed % 100000 == 0:
             print(f"   ... Processed {total_processed} sentences")
@@ -309,7 +326,7 @@ def run_pipeline(target_langs, delete_unzipped, include_tags):
     for lang, state in lang_states.items():
         state["f"].write("\n]\n")
         state["f"].close()
-        lang_counts[lang] = state["count"]
+        lang_counts[lang] = state["total"]
         z_path = os.path.join(OUT_DIR, f"tatoeba_dadb_{lang}.zip")
         with zipfile.ZipFile(z_path, 'w', zipfile.ZIP_DEFLATED) as zf:
             for root, _, files in os.walk(state["dir"]):
@@ -325,6 +342,7 @@ def run_pipeline(target_langs, delete_unzipped, include_tags):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('-l', '--langs', nargs='+')
+    parser.add_argument('--main', default=None, help="Main language code. Only sentences with a translation in this language are kept for other languages.")
     parser.add_argument('--delete-unzipped', action='store_true')
     parser.add_argument('--include-tags', action='store_true', help="Parse and include noisy Tatoeba tags")
     args = parser.parse_args()
@@ -334,9 +352,10 @@ if __name__ == "__main__":
     print("TATOEBA TO DAKANJI DICTIONARY BUILDER")
     print("========================================")
     print(f"Target Languages: {', '.join(args.langs) if args.langs else 'ALL'}")
+    print(f"Main Language:    {args.main if args.main else 'N/A (include all)'}")
     print(f"Include Tags:     {args.include_tags}")
     print(f"Delete Unzipped:  {args.delete_unzipped}\n")
     print("")
 
     download_data(args.include_tags)
-    run_pipeline(args.langs, args.delete_unzipped, args.include_tags)
+    run_pipeline(args.langs, args.main, args.delete_unzipped, args.include_tags)

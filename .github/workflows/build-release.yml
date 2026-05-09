@@ -54,36 +54,28 @@ jobs:
         run: python3 .github/extract_indexes.py
 
       - name: Generate release notes
-        run: python3 .github/generate_release_notes.py
+        run: python3 .github/generate_release_notes.py --tag "${{ steps.release_date.outputs.value }}"
 
-      - name: Commit updated LANGUAGES.md
+      - name: Commit updated LANGUAGES.md and stats
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add LANGUAGES.md
-          git diff --cached --quiet || git commit -m "chore: update LANGUAGES.md [skip ci]"
+          git add LANGUAGES.md stats/
+          git diff --cached --quiet || git commit -m "chore: update LANGUAGES.md and stats [skip ci]"
           git push
-
-      - name: Delete existing same-day release if present
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          TAG="${{ steps.release_date.outputs.value }}"
-          if gh release view "$TAG" --repo "${{ github.repository }}" > /dev/null 2>&1; then
-            echo "Deleting existing release $TAG..."
-            gh release delete "$TAG" --repo "${{ github.repository }}" --yes
-            gh api -X DELETE "repos/${{ github.repository }}/git/refs/tags/$TAG" 2>/dev/null || true
-          else
-            echo "No existing release for $TAG, nothing to delete."
-          fi
 
       - name: Create full release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "${{ steps.release_date.outputs.value }}" \
+          TAG="${{ steps.release_date.outputs.value }}"
+          if gh release view "$TAG" --repo "${{ github.repository }}" > /dev/null 2>&1; then
+            echo "Release $TAG already exists (same day) — replacing."
+            gh release delete "$TAG" --cleanup-tag --repo "${{ github.repository }}" --yes
+          fi
+          gh release create "$TAG" \
             --repo "${{ github.repository }}" \
-            --title "${{ steps.release_date.outputs.value }}" \
+            --title "$TAG" \
             --notes-file out/release_notes.md \
             --latest
 
@@ -155,16 +147,14 @@ jobs:
           printf 'Generated files:\n%s\n' "${files[*]}"
 
           python3 .github/extract_indexes.py
-          python3 .github/generate_release_notes.py --main-lang "${MAIN_LANG}"
+          python3 .github/generate_release_notes.py --main-lang "${MAIN_LANG}" --tag "${TAG_DATE}-main-${MAIN_LANG}"
 
           TAG="${TAG_DATE}-main-${MAIN_LANG}"
 
           if gh release view "$TAG" --repo "${{ github.repository }}" > /dev/null 2>&1; then
-            echo "Deleting existing release $TAG..."
-            gh release delete "$TAG" --repo "${{ github.repository }}" --yes
-            gh api -X DELETE "repos/${{ github.repository }}/git/refs/tags/$TAG" 2>/dev/null || true
+            echo "Release $TAG already exists (same day) — replacing."
+            gh release delete "$TAG" --cleanup-tag --repo "${{ github.repository }}" --yes
           fi
-
           gh release create "$TAG" \
             --repo "${{ github.repository }}" \
             --title "${TAG_DATE} (main: ${MAIN_LANG})" \
@@ -173,17 +163,36 @@ jobs:
 
           python3 .github/upload_assets.py "$TAG" "${{ github.repository }}"
 
+      - name: Commit stats file for filtered release
+        run: |
+          TAG_DATE="${{ needs.build-and-full-release.outputs.release_date }}"
+          MAIN_LANG="${{ matrix.main_lang }}"
+          TAG="${TAG_DATE}-main-${MAIN_LANG}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add stats/
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: add stats for ${TAG} [skip ci]"
+            for i in 1 2 3 4 5; do
+              git pull --rebase origin main && git push && break
+              echo "Push attempt $i failed, retrying in $((i * 5))s..."
+              sleep $((i * 5))
+            done
+          fi
+
       - name: Update stable latest tag (latest-main-${{ matrix.main_lang }})
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           STABLE_TAG="latest-main-${{ matrix.main_lang }}"
-          gh release delete "$STABLE_TAG" --repo "${{ github.repository }}" --yes 2>/dev/null || true
-          gh api -X DELETE "repos/${{ github.repository }}/git/refs/tags/$STABLE_TAG" 2>/dev/null || true
+          COMMIT_SHA=$(git rev-parse HEAD)
+          # --cleanup-tag atomically removes both the release object and its git tag,
+          # ensuring the subsequent create actually moves the tag to the new commit.
+          gh release delete "$STABLE_TAG" --cleanup-tag --repo "${{ github.repository }}" --yes 2>/dev/null || true
           gh release create "$STABLE_TAG" \
             --repo "${{ github.repository }}" \
             --title "Latest (main: ${{ matrix.main_lang }})" \
-            --notes "Always points to the most recent ${{ matrix.main_lang }} release." \
-            --target main \
+            --notes-file out/release_notes.md \
+            --target "$COMMIT_SHA" \
             --latest=false
           python3 .github/upload_assets.py "$STABLE_TAG" "${{ github.repository }}"

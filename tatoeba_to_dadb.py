@@ -13,17 +13,15 @@ from collections import defaultdict
 
 # Config
 BASE_URL = "https://downloads.tatoeba.org/exports/"
-TMP_DIR = "./tmp/"
-OUT_DIR = "./out/"
 CHUNK_SIZE = 25000
 GITHUB_USER = "CaptainDario"
 GITHUB_REPO = "Tatoeba-DaDb"
 
 # --- UTILS ---
 
-def download_data(include_tags):
+def download_data(include_tags, tmp_dir):
     """Downloads files with 24h caching. Skips tags file if not requested."""
-    os.makedirs(TMP_DIR, exist_ok=True)
+    os.makedirs(tmp_dir, exist_ok=True)
     one_day_seconds = 24 * 60 * 60
     
     def download_with_retry(url, dest, retries=10, connect_timeout=20,
@@ -85,20 +83,24 @@ def download_data(include_tags):
                 time.sleep(wait)
 
     targets = {
-        os.path.join(TMP_DIR, "sentences_detailed.tar.bz2"): BASE_URL + "sentences_detailed.tar.bz2",
-        os.path.join(TMP_DIR, "links.tar.bz2"): BASE_URL + "links.tar.bz2",
-        os.path.join(TMP_DIR, "sentences_with_audio.tar.bz2"): BASE_URL + "sentences_with_audio.tar.bz2",
-        os.path.join(TMP_DIR, "user_languages.tar.bz2"): BASE_URL + "user_languages.tar.bz2",
-        os.path.join(TMP_DIR, "users_sentences.csv"): BASE_URL + "users_sentences.csv"
+        os.path.join(tmp_dir, "sentences_detailed.tar.bz2"): BASE_URL + "sentences_detailed.tar.bz2",
+        os.path.join(tmp_dir, "links.tar.bz2"): BASE_URL + "links.tar.bz2",
+        os.path.join(tmp_dir, "sentences_with_audio.tar.bz2"): BASE_URL + "sentences_with_audio.tar.bz2",
+        os.path.join(tmp_dir, "user_languages.tar.bz2"): BASE_URL + "user_languages.tar.bz2",
+        os.path.join(tmp_dir, "users_sentences.csv"): BASE_URL + "users_sentences.csv"
     }
 
     if include_tags:
-        targets[os.path.join(TMP_DIR, "tags.tar.bz2")] = BASE_URL + "tags.tar.bz2"
+        targets[os.path.join(tmp_dir, "tags.tar.bz2")] = BASE_URL + "tags.tar.bz2"
 
     for fname, url in targets.items():
-        if os.path.exists(fname) and (time.time() - os.path.getmtime(fname)) < one_day_seconds:
-            print(f"[CACHE] '{fname}' is valid.")
-            continue
+        if os.path.exists(fname):
+            if (time.time() - os.path.getmtime(fname)) < one_day_seconds:
+                print(f"[CACHE] '{fname}' is valid.")
+                continue
+            else:
+                # Remove expired file so we don't try to resume it and get HTTP 416
+                os.remove(fname)
         print(f"[DOWNLOAD] Fetching '{fname}'...")
         download_with_retry(url, fname)
         print()
@@ -116,30 +118,30 @@ def stream_tar_bz2(filename):
 
 # --- STEP FUNCTIONS ---
 
-def parse_user_skills():
+def parse_user_skills(tmp_dir):
     print("1. Parsing user skills...")
     skills = {}
-    for line in stream_tar_bz2(os.path.join(TMP_DIR, "user_languages.tar.bz2")):
+    for line in stream_tar_bz2(os.path.join(tmp_dir, "user_languages.tar.bz2")):
         parts = line.split('\t')
         if len(parts) >= 3:
             skills[(parts[2], parts[0])] = parts[1]
     return skills
 
-def parse_user_reviews():
+def parse_user_reviews(tmp_dir):
     print("2. Parsing user reviews...")
     revs = defaultdict(int)
-    with open(os.path.join(TMP_DIR, "users_sentences.csv"), 'r', encoding='utf-8') as f:
+    with open(os.path.join(tmp_dir, "users_sentences.csv"), 'r', encoding='utf-8') as f:
         for line in f:
             parts = line.rstrip('\n').split('\t')
             if len(parts) >= 3:
                 revs[int(parts[1])] += int(parts[2])
     return revs
 
-def parse_tags():
+def parse_tags(tmp_dir):
     print("3. Parsing sentence tags (Optional)...")
     s_tags = defaultdict(list)
     unique_set = set()
-    fname = os.path.join(TMP_DIR, "tags.tar.bz2")
+    fname = os.path.join(tmp_dir, "tags.tar.bz2")
     if not os.path.exists(fname):
         return s_tags, unique_set
         
@@ -164,11 +166,11 @@ def check_bad_tag(tag) -> bool:
 
     return True
 
-def parse_audio_meta():
+def parse_audio_meta(tmp_dir):
     print("4. Parsing audio metadata...")
     s_audio = defaultdict(list)
     creators, licenses = set(), set()
-    for line in stream_tar_bz2(os.path.join(TMP_DIR, "sentences_with_audio.tar.bz2")):
+    for line in stream_tar_bz2(os.path.join(tmp_dir, "sentences_with_audio.tar.bz2")):
         parts = line.split('\t')
         if len(parts) >= 2:
             sid = int(parts[0])
@@ -179,8 +181,20 @@ def parse_audio_meta():
             if lic: licenses.add(lic)
     return s_audio, creators, licenses
 
-def build_translation_graph():
+def build_translation_graph(tmp_dir, allowed_langs=None):
     print("5. Building translation graph (Union-Find)...")
+    
+    lang_map = {}
+    if allowed_langs is not None:
+        print("   Pre-loading language map to filter translation links...")
+        for line in stream_tar_bz2(os.path.join(tmp_dir, "sentences_detailed.tar.bz2")):
+            parts = line.split('\t')
+            if len(parts) >= 2:
+                try:
+                    lang_map[int(parts[0])] = parts[1]
+                except ValueError:
+                    pass
+
     parent = {}
     def find(i):
         root = i
@@ -192,20 +206,54 @@ def build_translation_graph():
             i = nxt
         return root
 
-    for line in stream_tar_bz2(os.path.join(TMP_DIR, "links.tar.bz2")):
-        parts = line.split('\t')
-        if len(parts) >= 2:
-            u, v = int(parts[0]), int(parts[1])
-            root_u, root_v = find(u), find(v)
-            if root_u != root_v:
-                parent[root_u] = root_v
+    if allowed_langs is not None:
+        # Distance-2 bridging logic to avoid giant components while keeping valid translations
+        print("   Building intermediate adjacency list...")
+        adj = defaultdict(list)
+        for line in stream_tar_bz2(os.path.join(tmp_dir, "links.tar.bz2")):
+            parts = line.split('\t')
+            if len(parts) >= 2:
+                try:
+                    u, v = int(parts[0]), int(parts[1])
+                    adj[u].append(v)
+                    adj[v].append(u)
+                except ValueError:
+                    pass
+                    
+        print("   Applying Union-Find with distance-2 bridging...")
+        for node, neighbors in adj.items():
+            target_neighbors = [n for n in neighbors if lang_map.get(n) in allowed_langs]
+            if lang_map.get(node) in allowed_langs:
+                target_neighbors.append(node)
+                
+            if not target_neighbors:
+                continue
+                
+            first = target_neighbors[0]
+            for other in target_neighbors[1:]:
+                root_u, root_v = find(first), find(other)
+                if root_u != root_v:
+                    parent[root_u] = root_v
+    else:
+        # Original simple logic for all languages
+        for line in stream_tar_bz2(os.path.join(tmp_dir, "links.tar.bz2")):
+            parts = line.split('\t')
+            if len(parts) >= 2:
+                try:
+                    u, v = int(parts[0]), int(parts[1])
+                    root_u, root_v = find(u), find(v)
+                    if root_u != root_v:
+                        parent[root_u] = root_v
+                except ValueError:
+                    pass
+                    
     return find
 
-def count_languages():
+def count_languages(tmp_dir):
     """Pre-pass: return a dict of {lang: sentence_count} for all languages."""
     print("0. Counting sentences per language for top-N selection...")
     counts = defaultdict(int)
-    for line in stream_tar_bz2(os.path.join(TMP_DIR, "sentences_detailed.tar.bz2")):
+    for line in stream_tar_bz2(os.path.join(tmp_dir, "sentences_detailed.tar.bz2")):
         parts = line.split('\t')
         if len(parts) < 2: continue
         lang = parts[1]
@@ -213,11 +261,11 @@ def count_languages():
         counts[lang] += 1
     return counts
 
-def collect_main_lang_groups(main_lang, find_root):
+def collect_main_lang_groups(tmp_dir, main_lang, find_root):
     """Pre-pass: return the set of group roots that contain at least one sentence in main_lang."""
     print(f"5b. Collecting translation groups for main language '{main_lang}'...")
     main_groups = set()
-    for line in stream_tar_bz2(os.path.join(TMP_DIR, "sentences_detailed.tar.bz2")):
+    for line in stream_tar_bz2(os.path.join(tmp_dir, "sentences_detailed.tar.bz2")):
         parts = line.split('\t')
         if len(parts) < 4: continue
         sid, lang = int(parts[0]), parts[1]
@@ -228,24 +276,31 @@ def collect_main_lang_groups(main_lang, find_root):
 
 # --- MAIN ENGINE ---
 
-def run_pipeline(target_langs, top_n, main_lang, delete_unzipped, include_tags):
-    os.makedirs(OUT_DIR, exist_ok=True)
+def run_pipeline(target_langs, top_n, main_lang, delete_unzipped, include_tags, tmp_dir, out_dir):
+    os.makedirs(out_dir, exist_ok=True)
 
     # If --top is set and --langs is not, determine top N languages by sentence count
     if top_n and not target_langs:
-        lang_counts = count_languages()
+        lang_counts = count_languages(tmp_dir)
         ranked = sorted(lang_counts.items(), key=lambda x: x[1], reverse=True)
         target_langs = [lang for lang, _ in ranked[:top_n]]
         print(f"   Top {top_n} languages selected: {', '.join(target_langs)}")
 
     # Run parsing steps
-    skills = parse_user_skills()
-    reviews = parse_user_reviews()
-    sentence_tags, unique_tags = parse_tags() if include_tags else ({}, set())
-    audio_meta, creators, licenses = parse_audio_meta()
-    find_root = build_translation_graph()
+    skills = parse_user_skills(tmp_dir)
+    reviews = parse_user_reviews(tmp_dir)
+    sentence_tags, unique_tags = parse_tags(tmp_dir) if include_tags else ({}, set())
+    audio_meta, creators, licenses = parse_audio_meta(tmp_dir)
+    
+    allowed_langs = None
+    if target_langs:
+        allowed_langs = set(target_langs)
+        if main_lang:
+            allowed_langs.add(main_lang)
+            
+    find_root = build_translation_graph(tmp_dir, allowed_langs)
 
-    main_groups = collect_main_lang_groups(main_lang, find_root) if main_lang else None
+    main_groups = collect_main_lang_groups(tmp_dir, main_lang, find_root) if main_lang else None
 
     # Create Tag Bank
     tag_bank = []
@@ -260,7 +315,7 @@ def run_pipeline(target_langs, top_n, main_lang, delete_unzipped, include_tags):
     lang_states = {}
     total_processed = 0
 
-    for line in stream_tar_bz2(os.path.join(TMP_DIR, "sentences_detailed.tar.bz2")):
+    for line in stream_tar_bz2(os.path.join(tmp_dir, "sentences_detailed.tar.bz2")):
         parts = line.split('\t')
         if len(parts) < 4: continue
         
@@ -270,7 +325,7 @@ def run_pipeline(target_langs, top_n, main_lang, delete_unzipped, include_tags):
         if main_groups is not None and lang != main_lang and find_root(sid) not in main_groups: continue
 
         if lang not in lang_states:
-            l_dir = os.path.join(OUT_DIR, f"dict_{lang}")
+            l_dir = os.path.join(out_dir, f"dict_{lang}")
             os.makedirs(l_dir, exist_ok=True)
             
             # Robust index.json
@@ -351,14 +406,14 @@ def run_pipeline(target_langs, top_n, main_lang, delete_unzipped, include_tags):
         state["f"].write("\n]\n")
         state["f"].close()
         lang_counts[lang] = state["total"]
-        z_path = os.path.join(OUT_DIR, f"tatoeba_dadb_{lang}.zip")
+        z_path = os.path.join(out_dir, f"tatoeba_dadb_{lang}.zip")
         with zipfile.ZipFile(z_path, 'w', zipfile.ZIP_DEFLATED) as zf:
             for root, _, files in os.walk(state["dir"]):
                 for file in files:
                     zf.write(os.path.join(root, file), os.path.relpath(os.path.join(root, file), state["dir"]))
         if delete_unzipped: shutil.rmtree(state["dir"])
 
-    stats_path = os.path.join(OUT_DIR, "stats.json")
+    stats_path = os.path.join(out_dir, "stats.json")
     with open(stats_path, "w", encoding="utf-8") as f:
         json.dump(lang_counts, f, indent=2, ensure_ascii=False)
     print(f"   Wrote sentence counts to {stats_path}")
@@ -370,6 +425,8 @@ if __name__ == "__main__":
     parser.add_argument('--main', default=None, help="Main language code. Only sentences with a translation in this language are kept for other languages.")
     parser.add_argument('--delete-unzipped', action='store_true')
     parser.add_argument('--include-tags', action='store_true', help="Parse and include noisy Tatoeba tags")
+    parser.add_argument('--tmp-dir', default="./tmp/", help="Temporary directory for downloads")
+    parser.add_argument('--out-dir', default="./out/", help="Output directory for generated dictionaries")
     args = parser.parse_args()
     
     print("")
@@ -382,5 +439,5 @@ if __name__ == "__main__":
     print(f"Delete Unzipped:  {args.delete_unzipped}\n")
     print("")
 
-    download_data(args.include_tags)
-    run_pipeline(args.langs, args.top, args.main, args.delete_unzipped, args.include_tags)
+    download_data(args.include_tags, args.tmp_dir)
+    run_pipeline(args.langs, args.top, args.main, args.delete_unzipped, args.include_tags, args.tmp_dir, args.out_dir)

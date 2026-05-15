@@ -211,3 +211,6 @@ out/**
 !out/.gitkeep
 tmp/**
 !tmp/.gitkeep
+tests/out/**
+tests/out_no_main_lang/**
+tests/out_main_lang/**

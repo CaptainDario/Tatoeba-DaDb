@@ -46,3 +46,11 @@ Generated dictionaries are saved to the `/out/` directory as ready-to-import `.z
 ## Format / Schema Used
 
 The output follows [DaKanji example bank schema](https://github.com/CaptainDario/DaKanji/blob/refactor-v4/dart_packages/da_db/schemata/examples/example_banks/README.md).
+
+## Tests
+
+Run the tests with
+
+```bash
+uv run pytest tests
+```

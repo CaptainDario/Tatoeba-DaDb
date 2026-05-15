@@ -31,6 +31,9 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked
 
+      - name: Run tests
+        run: uv run pytest tests/
+
       - name: Compute release date
         id: release_date
         run: echo "value=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"

@@ -181,73 +181,19 @@ def parse_audio_meta(tmp_dir):
             if lic: licenses.add(lic)
     return s_audio, creators, licenses
 
-def build_translation_graph(tmp_dir, allowed_langs=None):
-    print("5. Building translation graph (Union-Find)...")
-    
-    lang_map = {}
-    if allowed_langs is not None:
-        print("   Pre-loading language map to filter translation links...")
-        for line in stream_tar_bz2(os.path.join(tmp_dir, "sentences_detailed.tar.bz2")):
-            parts = line.split('\t')
-            if len(parts) >= 2:
-                try:
-                    lang_map[int(parts[0])] = parts[1]
-                except ValueError:
-                    pass
-
-    parent = {}
-    def find(i):
-        root = i
-        while parent.get(root, root) != root:
-            root = parent[root]
-        while parent.get(i, i) != root:
-            nxt = parent[i]
-            parent[i] = root
-            i = nxt
-        return root
-
-    if allowed_langs is not None:
-        # Distance-2 bridging logic to avoid giant components while keeping valid translations
-        print("   Building intermediate adjacency list...")
-        adj = defaultdict(list)
-        for line in stream_tar_bz2(os.path.join(tmp_dir, "links.tar.bz2")):
-            parts = line.split('\t')
-            if len(parts) >= 2:
-                try:
-                    u, v = int(parts[0]), int(parts[1])
-                    adj[u].append(v)
-                    adj[v].append(u)
-                except ValueError:
-                    pass
-                    
-        print("   Applying Union-Find with distance-2 bridging...")
-        for node, neighbors in adj.items():
-            target_neighbors = [n for n in neighbors if lang_map.get(n) in allowed_langs]
-            if lang_map.get(node) in allowed_langs:
-                target_neighbors.append(node)
-                
-            if not target_neighbors:
-                continue
-                
-            first = target_neighbors[0]
-            for other in target_neighbors[1:]:
-                root_u, root_v = find(first), find(other)
-                if root_u != root_v:
-                    parent[root_u] = root_v
-    else:
-        # Original simple logic for all languages
-        for line in stream_tar_bz2(os.path.join(tmp_dir, "links.tar.bz2")):
-            parts = line.split('\t')
-            if len(parts) >= 2:
-                try:
-                    u, v = int(parts[0]), int(parts[1])
-                    root_u, root_v = find(u), find(v)
-                    if root_u != root_v:
-                        parent[root_u] = root_v
-                except ValueError:
-                    pass
-                    
-    return find
+def build_direct_links(tmp_dir):
+    print("5. Mapping direct translations (Level 1 only)...")
+    links = defaultdict(set)
+    for line in stream_tar_bz2(os.path.join(tmp_dir, "links.tar.bz2")):
+        parts = line.split('\t')
+        if len(parts) >= 2:
+            try:
+                u, v = int(parts[0]), int(parts[1])
+                links[u].add(v)
+                links[v].add(u)
+            except ValueError:
+                pass
+    return links
 
 def count_languages(tmp_dir):
     """Pre-pass: return a dict of {lang: sentence_count} for all languages."""
@@ -261,18 +207,19 @@ def count_languages(tmp_dir):
         counts[lang] += 1
     return counts
 
-def collect_main_lang_groups(tmp_dir, main_lang, find_root):
-    """Pre-pass: return the set of group roots that contain at least one sentence in main_lang."""
-    print(f"5b. Collecting translation groups for main language '{main_lang}'...")
-    main_groups = set()
+def collect_main_lang_groups(tmp_dir, main_lang, links):
+    print(f"5b. Identifying sentences linked to main language '{main_lang}'...")
+    linked_to_main = set()
     for line in stream_tar_bz2(os.path.join(tmp_dir, "sentences_detailed.tar.bz2")):
         parts = line.split('\t')
-        if len(parts) < 4: continue
+        if len(parts) < 2:
+            continue
         sid, lang = int(parts[0]), parts[1]
         if lang == main_lang:
-            main_groups.add(find_root(sid))
-    print(f"   Found {len(main_groups)} translation groups with '{main_lang}' sentences.")
-    return main_groups
+            linked_to_main.add(sid)
+            for neighbor in links.get(sid, []):
+                linked_to_main.add(neighbor)
+    return linked_to_main
 
 # --- MAIN ENGINE ---
 
@@ -298,9 +245,9 @@ def run_pipeline(target_langs, top_n, main_lang, delete_unzipped, include_tags, 
         if main_lang:
             allowed_langs.add(main_lang)
             
-    find_root = build_translation_graph(tmp_dir, allowed_langs)
+    links = build_direct_links(tmp_dir)
 
-    main_groups = collect_main_lang_groups(tmp_dir, main_lang, find_root) if main_lang else None
+    valid_sentence_ids = collect_main_lang_groups(tmp_dir, main_lang, links) if main_lang else None
 
     # Create Tag Bank
     tag_bank = []
@@ -322,7 +269,7 @@ def run_pipeline(target_langs, top_n, main_lang, delete_unzipped, include_tags, 
         sid, lang, text, user = int(parts[0]), parts[1], parts[2], parts[3]
         if lang == r'\N': continue  # skip Tatoeba null/unknown language
         if target_langs and lang not in target_langs: continue
-        if main_groups is not None and lang != main_lang and find_root(sid) not in main_groups: continue
+        if valid_sentence_ids is not None and sid not in valid_sentence_ids: continue
 
         if lang not in lang_states:
             l_dir = os.path.join(out_dir, f"dict_{lang}")
@@ -382,8 +329,12 @@ def run_pipeline(target_langs, top_n, main_lang, delete_unzipped, include_tags, 
                 "tags": list(dict.fromkeys(a_tags))
             })
 
+        # Generate the list of groupIds for this sentence using min(sid, neighbor)
+        my_links = links.get(sid, set())
+        group_ids = sorted(list(set([min(sid, neighbor) for neighbor in my_links])))
+
         obj = {
-            "groupId": find_root(sid),
+            "groupIds": group_ids,
             "sentence": text,
             "tags": list(dict.fromkeys(sentence_tags.get(sid, []))),
             "stats": stats,

@@ -26,14 +26,14 @@ def run_main_eng():
         delete_unzipped=False, include_tags=False, tmp_dir=TMP_DIR, out_dir=out_dir
     )
     
-    sentence_to_group = {}
+    sentence_to_groups = {}
     for lang in ["eng", "jpn"]:
         bank_path = os.path.join(out_dir, f"dict_{lang}", "example_bank_1.json")
         if os.path.exists(bank_path):
             with open(bank_path, "r", encoding="utf-8") as f:
                 for item in json.load(f):
-                    sentence_to_group[item["sentence"]] = item["groupId"]
-    return sentence_to_group
+                    sentence_to_groups[item["sentence"]] = set(item["groupIds"])
+    return sentence_to_groups
 
 @pytest.fixture(scope="module")
 def run_main_jpn():
@@ -77,18 +77,18 @@ def run_no_main():
 # Tests for group ID (using main=eng output)
 @pytest.mark.parametrize("case", GROUP_ID_CASES, ids=lambda c: c["source"])
 def test_group_ids(run_main_eng, case):
-    sentence_to_group = run_main_eng
+    sentence_to_groups = run_main_eng
     source = case["source"]
-    assert source in sentence_to_group, f"Source '{source}' not found."
-    source_group = sentence_to_group[source]
+    assert source in sentence_to_groups, f"Source '{source}' not found."
+    source_groups = sentence_to_groups[source]
     
     for expected in case["expected_targets"]:
-        if expected in sentence_to_group:
-            assert sentence_to_group[expected] == source_group, f"Expected '{expected}' to be in group {source_group}"
+        if expected in sentence_to_groups:
+            assert source_groups.intersection(sentence_to_groups[expected]), f"Expected '{expected}' to share at least one groupId with '{source}'"
             
     for unexpected in case["unexpected_targets"]:
-        if unexpected in sentence_to_group:
-            assert sentence_to_group[unexpected] != source_group, f"Expected '{unexpected}' to NOT be in group {source_group}"
+        if unexpected in sentence_to_groups:
+            assert not source_groups.intersection(sentence_to_groups[unexpected]), f"Expected '{unexpected}' to NOT share any groupIds with '{source}'"
 
 
 # Tests for main_lang=jpn

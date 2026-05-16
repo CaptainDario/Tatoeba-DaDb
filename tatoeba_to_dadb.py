@@ -181,18 +181,35 @@ def parse_audio_meta(tmp_dir):
             if lic: licenses.add(lic)
     return s_audio, creators, licenses
 
-def build_direct_links(tmp_dir):
+def build_direct_links(tmp_dir, allowed_langs=None):
     print("5. Mapping direct translations (Level 1 only)...")
     links = defaultdict(set)
-    for line in stream_tar_bz2(os.path.join(tmp_dir, "links.tar.bz2")):
-        parts = line.split('\t')
-        if len(parts) >= 2:
+    
+    lang_map = {}
+    if allowed_langs is not None:
+        print("   Pre-loading language map to filter links...")
+        for l in stream_tar_bz2(os.path.join(tmp_dir, "sentences_detailed.tar.bz2")):
+            p = l.split("\t")
+            if len(p) >= 2:
+                try:
+                    sid, lang = int(p[0]), p[1]
+                    if lang in allowed_langs:
+                        lang_map[sid] = lang
+                except ValueError: pass
+
+    for l in stream_tar_bz2(os.path.join(tmp_dir, "links.tar.bz2")):
+        p = l.split("\t")
+        if len(p) >= 2:
             try:
-                u, v = int(parts[0]), int(parts[1])
-                links[u].add(v)
-                links[v].add(u)
-            except ValueError:
-                pass
+                u, v = int(p[0]), int(p[1])
+                if allowed_langs is not None:
+                    if u in lang_map and v in lang_map:
+                        links[u].add(v)
+                        links[v].add(u)
+                else:
+                    links[u].add(v)
+                    links[v].add(u)
+            except ValueError: pass
     return links
 
 def count_languages(tmp_dir):
@@ -245,7 +262,7 @@ def run_pipeline(target_langs, top_n, main_lang, delete_unzipped, include_tags, 
         if main_lang:
             allowed_langs.add(main_lang)
             
-    links = build_direct_links(tmp_dir)
+    links = build_direct_links(tmp_dir, allowed_langs)
 
     valid_sentence_ids = collect_main_lang_groups(tmp_dir, main_lang, links) if main_lang else None
 

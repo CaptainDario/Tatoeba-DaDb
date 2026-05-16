@@ -23,5 +23,15 @@ MAIN_LANG_TEST_CASES = [
         "source": "Let's try something.",
         "lang": "eng",
         "should_be_excluded": False # This has a Japanese counterpart ("何かしてみましょう。"), so it must be included
+    },
+    {
+        "source": "I have to go to sleep.",
+        "lang": "eng",
+        "should_be_excluded": False # Linked to "私は眠らなければなりません。" (jpn)
+    },
+    {
+        "source": "What are you doing?",
+        "lang": "eng",
+        "should_be_excluded": False # Linked to "何してるの？" (jpn)
     }
 ]

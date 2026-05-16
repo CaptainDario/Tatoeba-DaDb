@@ -110,3 +110,13 @@ def test_no_main_lang(run_no_main, case):
     source = case["source"]
     # With no main lang, everything should be included
     assert source in included_sentences, f"'{source}' should be INCLUDED but was EXCLUDED"
+
+def test_multiple_group_ids(run_main_eng):
+    sentence_to_groups = run_main_eng
+    target = "私は眠らなければなりません。"
+    assert target in sentence_to_groups
+    groups = sentence_to_groups[target]
+    # In this test subset, 4703 is linked to 1277 (eng) and 1009343 (eng)
+    assert len(groups) >= 2, f"Expected {target} to have multiple groupIds, got {groups}"
+    assert 1277 in groups
+    assert 4703 in groups

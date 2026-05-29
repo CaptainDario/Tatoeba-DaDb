@@ -27,16 +27,34 @@ uv run tatoeba_to_dadb.py
 
 ### Examples
 
-Extract only English and Japanese dictionaries and clean up the unzipped folders afterward:
-
+**Standard run (all languages):**
 ```bash
-uv run tatoeba_to_dadb.py -l eng jpn --delete-unzipped
+uv run tatoeba_to_dadb.py
 ```
 
-Extract only German, keeping the unzipped folders:
-
+**Extract specific languages and clean up raw files:**
 ```bash
-uv run tatoeba_to_dadb.py -l deu
+uv run tatoeba_to_dadb.py --langs eng jpn deu --delete-unzipped
+```
+
+**Extract the top 25 most frequent languages:**
+```bash
+uv run tatoeba_to_dadb.py --top 25
+```
+
+**Filter for translations related to a main language (e.g., only English-linked sentences):**
+```bash
+uv run tatoeba_to_dadb.py --main eng
+```
+
+**Include Tatoeba tags (noisy data) and use custom directories:**
+```bash
+uv run tatoeba_to_dadb.py --include-tags --tmp-dir ./custom_tmp --out-dir ./custom_out
+```
+
+**Full production-style filtered release:**
+```bash
+uv run tatoeba_to_dadb.py --langs eng jpn --main eng --include-tags --delete-unzipped
 ```
 
 ## Output Location

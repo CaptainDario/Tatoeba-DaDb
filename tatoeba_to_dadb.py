@@ -8,7 +8,6 @@ import json
 import zipfile
 import shutil
 import argparse
-import sys
 from collections import defaultdict
 
 # Config
@@ -28,7 +27,7 @@ def download_data(include_tags, tmp_dir):
                             min_speed_bps=50 * 1024, speed_window=15):
         """Resumable download with minimum-speed enforcement.
 
-        If throughput drops below `min_speed_bps` bytes/s for `speed_window`
+        If throughput drops below \`min_speed_bps\` bytes/s for \`speed_window\`
         consecutive seconds the chunk loop raises TimeoutError and the retry
         logic resumes from the partial file using an HTTP Range request.
         """
@@ -181,34 +180,16 @@ def parse_audio_meta(tmp_dir):
             if lic: licenses.add(lic)
     return s_audio, creators, licenses
 
-def build_direct_links(tmp_dir, allowed_langs=None):
-    print("5. Mapping direct translations (Level 1 only)...")
+def build_direct_links(tmp_dir):
+    print("5. Mapping direct translations...")
     links = defaultdict(set)
-    
-    lang_map = {}
-    if allowed_langs is not None:
-        print("   Pre-loading language map to filter links...")
-        for l in stream_tar_bz2(os.path.join(tmp_dir, "sentences_detailed.tar.bz2")):
-            p = l.split("\t")
-            if len(p) >= 2:
-                try:
-                    sid, lang = int(p[0]), p[1]
-                    if lang in allowed_langs:
-                        lang_map[sid] = lang
-                except ValueError: pass
-
-    for l in stream_tar_bz2(os.path.join(tmp_dir, "links.tar.bz2")):
-        p = l.split("\t")
-        if len(p) >= 2:
+    for line in stream_tar_bz2(os.path.join(tmp_dir, "links.tar.bz2")):
+        parts = line.split('\t')
+        if len(parts) >= 2:
             try:
-                u, v = int(p[0]), int(p[1])
-                if allowed_langs is not None:
-                    if u in lang_map and v in lang_map:
-                        links[u].add(v)
-                        links[v].add(u)
-                else:
-                    links[u].add(v)
-                    links[v].add(u)
+                u, v = int(parts[0]), int(parts[1])
+                links[u].add(v)
+                links[v].add(u)
             except ValueError: pass
     return links
 
@@ -223,20 +204,6 @@ def count_languages(tmp_dir):
         if lang == r'\N': continue
         counts[lang] += 1
     return counts
-
-def collect_main_lang_groups(tmp_dir, main_lang, links):
-    print(f"5b. Identifying sentences linked to main language '{main_lang}'...")
-    linked_to_main = set()
-    for line in stream_tar_bz2(os.path.join(tmp_dir, "sentences_detailed.tar.bz2")):
-        parts = line.split('\t')
-        if len(parts) < 2:
-            continue
-        sid, lang = int(parts[0]), parts[1]
-        if lang == main_lang:
-            linked_to_main.add(sid)
-            for neighbor in links.get(sid, []):
-                linked_to_main.add(neighbor)
-    return linked_to_main
 
 # --- MAIN ENGINE ---
 
@@ -256,17 +223,87 @@ def run_pipeline(target_langs, top_n, main_lang, delete_unzipped, include_tags, 
     sentence_tags, unique_tags = parse_tags(tmp_dir) if include_tags else ({}, set())
     audio_meta, creators, licenses = parse_audio_meta(tmp_dir)
     
-    allowed_langs = None
-    if target_langs:
-        allowed_langs = set(target_langs)
-        if main_lang:
-            allowed_langs.add(main_lang)
+    allowed_langs = set(target_langs) if target_langs else set()
+    if main_lang:
+        allowed_langs.add(main_lang)
             
-    links = build_direct_links(tmp_dir, allowed_langs)
+    links = build_direct_links(tmp_dir)
 
-    valid_sentence_ids = collect_main_lang_groups(tmp_dir, main_lang, links) if main_lang else None
+    # 1. Load Mapping and Deduplicate sentences (Strict identical text only)
+    print("6. Loading language map and deduplicating sentences...")
+    sid_to_lang = {} # sid -> lang
+    text_to_primary = {} # (lang, text) -> primary_sid
+    primary_to_sids = defaultdict(list) # primary_sid -> [all_merged_sids]
+    sid_to_merged_info = {} # sid -> (text, user)
 
-    # Create Tag Bank
+    for line in stream_tar_bz2(os.path.join(tmp_dir, "sentences_detailed.tar.bz2")):
+        parts = line.split('\t')
+        if len(parts) < 4: continue
+        sid, lang, text, user = int(parts[0]), parts[1], parts[2].strip(), parts[3]
+        if lang == r'\N': continue
+        
+        sid_to_lang[sid] = lang
+        
+        # We only deduplicate sentences in the languages we are actually processing
+        if not allowed_langs or lang in allowed_langs:
+            key = (lang, text)
+            if key not in text_to_primary:
+                text_to_primary[key] = sid
+            primary = text_to_primary[key]
+            primary_to_sids[primary].append(sid)
+            sid_to_merged_info[sid] = (text, user)
+
+    # 2. Transitive Grouping (Depth 2) with Pivot
+    print("7. Calculating transitive group IDs (Depth 2 pivot)...")
+    primary_to_groups = defaultdict(set)
+    
+    # Pre-merge links for each primary ID to speed up grouping
+    primary_links = defaultdict(set)
+    for primary, sids in primary_to_sids.items():
+        for sid in sids:
+            for neighbor in links.get(sid, []):
+                primary_links[primary].add(neighbor)
+
+    # Calculate pivots
+    for primary in primary_to_sids:
+        # Every sentence belongs to its own primary group
+        pivots = {primary}
+        
+        # Look for pivots in main_lang (Depth 2)
+        # Hop 1
+        for n in primary_links[primary]:
+            n_lang = sid_to_lang.get(n)
+            if n_lang == main_lang:
+                pivots.add(n)
+            
+            # Hop 2 (Traverse through ANY language)
+            for nn in links.get(n, []):
+                if sid_to_lang.get(nn) == main_lang:
+                    pivots.add(nn)
+        
+        if len(pivots) > 1 or not main_lang:
+            primary_to_groups[primary] = pivots
+        else:
+            # Fallback for secondary lang with no main_lang link: smallest connected SID in target_langs
+            curr_min = primary
+            for n in primary_links[primary]:
+                if sid_to_lang.get(n) in allowed_langs:
+                    curr_min = min(curr_min, n)
+            primary_to_groups[primary] = {curr_min, primary}
+
+    # Identify sentences that should be included in the output
+    print("8. Identifying valid sentences for output...")
+    valid_primaries = set()
+    for primary in primary_to_sids:
+        lang = sid_to_lang[primary]
+        if not main_lang or lang == main_lang:
+            valid_primaries.add(primary)
+        else:
+            # Secondary language sentence must have a link to the main language
+            if any(sid_to_lang.get(g) == main_lang for g in primary_to_groups[primary]):
+                valid_primaries.add(primary)
+
+    # 3. Create Tag Bank
     tag_bank = []
     for t in sorted(unique_tags):
         tag_bank.append([t, "sentence_tag", 1, f"Tatoeba: {t}", 0])
@@ -275,18 +312,15 @@ def run_pipeline(target_langs, top_n, main_lang, delete_unzipped, include_tags, 
     for c in sorted(creators):
         tag_bank.append([c, "audio_creator", 3, f"Voice: {c}", 0])
 
-    print("6. Generating language chunks...")
+    print("9. Generating language chunks...")
     lang_states = {}
     total_processed = 0
 
-    for line in stream_tar_bz2(os.path.join(tmp_dir, "sentences_detailed.tar.bz2")):
-        parts = line.split('\t')
-        if len(parts) < 4: continue
-        
-        sid, lang, text, user = int(parts[0]), parts[1], parts[2], parts[3]
-        if lang == r'\N': continue  # skip Tatoeba null/unknown language
+    # Sort primary IDs to ensure deterministic output
+    for primary in sorted(list(valid_primaries)):
+        lang = sid_to_lang[primary]
+        text, user = sid_to_merged_info[primary]
         if target_langs and lang not in target_langs: continue
-        if valid_sentence_ids is not None and sid not in valid_sentence_ids: continue
 
         if lang not in lang_states:
             l_dir = os.path.join(out_dir, f"dict_{lang}")
@@ -326,9 +360,25 @@ def run_pipeline(target_langs, top_n, main_lang, delete_unzipped, include_tags, 
             state["f"] = open(os.path.join(state["dir"], f"example_bank_{state['idx']}.json"), "w", encoding="utf-8")
             state["f"].write("[\n")
 
-        # Prep JSON object
+        # Consolidate merged metadata
+        merged_sids = primary_to_sids[primary]
+        total_review = sum(reviews[s] for s in merged_sids)
+        merged_tags = set()
+        for s in merged_sids:
+            merged_tags.update(sentence_tags.get(s, []))
+        
+        merged_audio = []
+        for s in merged_sids:
+            for a in audio_meta.get(s, []):
+                a_tags = [t for t in [a['user'], a['lic']] if t]
+                merged_audio.append({
+                    "url": f"https://tatoeba.org/audio/download/{a['id']}",
+                    "tags": list(dict.fromkeys(a_tags))
+                })
+
+        # Prep JSON object stats
         stats = []
-        if sid in reviews: stats.append({"statName": "review_score", "value": reviews[sid]})
+        if total_review: stats.append({"statName": "review_score", "value": total_review})
         sk = skills.get((user, lang))
         if sk:
             skill_value = int(sk) if sk.isdigit() else 0
@@ -337,25 +387,12 @@ def run_pipeline(target_langs, top_n, main_lang, delete_unzipped, include_tags, 
                 skill_entry["displayValue"] = str(sk)
             stats.append(skill_entry)
 
-        # Deduplicate tags
-        audios = []
-        for a in audio_meta.get(sid, []):
-            a_tags = [t for t in [a['user'], a['lic']] if t]
-            audios.append({
-                "url": f"https://tatoeba.org/audio/download/{a['id']}",
-                "tags": list(dict.fromkeys(a_tags))
-            })
-
-        # Generate the list of groupIds for this sentence using min(sid, neighbor)
-        my_links = links.get(sid, set())
-        group_ids = sorted(list(set([min(sid, neighbor) for neighbor in my_links])))
-
         obj = {
-            "groupIds": group_ids,
+            "groupIds": sorted(list(primary_to_groups[primary])),
             "sentence": text,
-            "tags": list(dict.fromkeys(sentence_tags.get(sid, []))),
+            "tags": sorted(list(merged_tags)),
             "stats": stats,
-            "audios": audios
+            "audios": merged_audio
         }
 
         if not state["first"]: state["f"].write(",\n")
@@ -365,10 +402,10 @@ def run_pipeline(target_langs, top_n, main_lang, delete_unzipped, include_tags, 
         state["total"] += 1
         total_processed += 1
         if total_processed % 100000 == 0:
-            print(f"   ... Processed {total_processed} sentences")
+            print(f"   ... Processed {total_processed} primary sentences")
 
     # Finalize files
-    print("7. Zipping results...")
+    print("10. Zipping results...")
     lang_counts = {}
     for lang, state in lang_states.items():
         state["f"].write("\n]\n")
@@ -388,10 +425,10 @@ def run_pipeline(target_langs, top_n, main_lang, delete_unzipped, include_tags, 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('-l', '--langs', nargs='+')
+    parser.add_argument('-l', '--langs', nargs='+', help="Specific language codes to process (e.g. jpn eng)")
     parser.add_argument('--top', type=int, default=None, help="Only process the top N most frequent languages (ignored when --langs is set)")
     parser.add_argument('--main', default=None, help="Main language code. Only sentences with a translation in this language are kept for other languages.")
-    parser.add_argument('--delete-unzipped', action='store_true')
+    parser.add_argument('--delete-unzipped', action='store_true', help="Delete unzipped JSON files after creating ZIP archives")
     parser.add_argument('--include-tags', action='store_true', help="Parse and include noisy Tatoeba tags")
     parser.add_argument('--tmp-dir', default="./tmp/", help="Temporary directory for downloads")
     parser.add_argument('--out-dir', default="./out/", help="Output directory for generated dictionaries")

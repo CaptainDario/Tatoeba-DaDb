@@ -8,13 +8,14 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 import tatoeba_to_dadb
 from tests.group_id_test_cases import TEST_CASES as GROUP_ID_CASES
 from tests.main_lang_test_cases import MAIN_LANG_TEST_CASES
+from tests.deduplication_test_cases import DEDUPLICATION_TEST_CASES
 
 TMP_DIR = os.path.join("tests", "data")
 
 @pytest.fixture(scope="session", autouse=True)
 def check_data():
     if not os.path.exists(os.path.join(TMP_DIR, "sentences_detailed.tar.bz2")):
-        pytest.fail("Test data missing. Please run `extract_test_data.py` first.")
+        pytest.fail("Test data missing. Please run \`extract_test_data.py\` first.")
 
 @pytest.fixture(scope="module")
 def run_main_eng():
@@ -74,7 +75,25 @@ def run_no_main():
     return included_sentences
 
 
-# Tests for group ID (using main=eng output)
+# --- DEDUPLICATION TESTS ---
+
+@pytest.mark.parametrize("case", DEDUPLICATION_TEST_CASES, ids=lambda c: c["sentence"])
+def test_deduplication(run_main_eng, case):
+    # We check the actual JSON output file directly for exact occurrence counts
+    out_dir = os.path.join("tests", "out")
+    bank_path = os.path.join(out_dir, "dict_jpn", "example_bank_1.json")
+    if not os.path.exists(bank_path):
+        pytest.fail("Export bank not found.")
+        
+    with open(bank_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+        matches = [item for item in data if item["sentence"] == case["sentence"]]
+        assert len(matches) == case["expected_count"], \
+            f"Failed: {case['description']}. Expected {case['expected_count']} but found {len(matches)}."
+
+
+# --- GROUP ID LOGIC TESTS ---
+
 @pytest.mark.parametrize("case", GROUP_ID_CASES, ids=lambda c: c["source"])
 def test_group_ids(run_main_eng, case):
     sentence_to_groups = run_main_eng
@@ -82,16 +101,25 @@ def test_group_ids(run_main_eng, case):
     assert source in sentence_to_groups, f"Source '{source}' not found."
     source_groups = sentence_to_groups[source]
     
+    # All expected targets must share at least one group ID with the source
     for expected in case["expected_targets"]:
         if expected in sentence_to_groups:
             assert source_groups.intersection(sentence_to_groups[expected]), f"Expected '{expected}' to share at least one groupId with '{source}'"
             
+    # CRITICAL: All expected targets must share at least one group ID with EACH OTHER
+    expected_present = [e for e in case["expected_targets"] if e in sentence_to_groups]
+    for i in range(len(expected_present)):
+        for j in range(i + 1, len(expected_present)):
+            t1, t2 = expected_present[i], expected_present[j]
+            assert sentence_to_groups[t1].intersection(sentence_to_groups[t2]), f"Expected '{t1}' and '{t2}' to share at least one groupId."
+
     for unexpected in case["unexpected_targets"]:
         if unexpected in sentence_to_groups:
             assert not source_groups.intersection(sentence_to_groups[unexpected]), f"Expected '{unexpected}' to NOT share any groupIds with '{source}'"
 
 
-# Tests for main_lang=jpn
+# --- LANGUAGE INCLUSION TESTS ---
+
 @pytest.mark.parametrize("case", MAIN_LANG_TEST_CASES, ids=lambda c: c["source"])
 def test_main_lang_jpn(run_main_jpn, case):
     included_sentences = run_main_jpn
@@ -102,21 +130,20 @@ def test_main_lang_jpn(run_main_jpn, case):
     else:
         assert is_included, f"'{source}' should be INCLUDED but was EXCLUDED"
 
-
-# Tests for main_lang=None
 @pytest.mark.parametrize("case", MAIN_LANG_TEST_CASES, ids=lambda c: c["source"])
 def test_no_main_lang(run_no_main, case):
     included_sentences = run_no_main
     source = case["source"]
-    # With no main lang, everything should be included
     assert source in included_sentences, f"'{source}' should be INCLUDED but was EXCLUDED"
+
+
+# --- REGRESSION TESTS ---
 
 def test_multiple_group_ids(run_main_eng):
     sentence_to_groups = run_main_eng
     target = "私は眠らなければなりません。"
     assert target in sentence_to_groups
     groups = sentence_to_groups[target]
-    # In this test subset, 4703 is linked to 1277 (eng) and 1009343 (eng)
     assert len(groups) >= 2, f"Expected {target} to have multiple groupIds, got {groups}"
     assert 1277 in groups
     assert 4703 in groups

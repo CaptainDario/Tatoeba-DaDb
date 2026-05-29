@@ -3,7 +3,7 @@ language overview to LANGUAGES.md at the repository root.
 
 The release notes show only the top TOP_N languages by sentence count.
 A link to LANGUAGES.md (on the main branch) is appended for the full list.
-The per-release stats are saved to stats/<tag>.json.
+The per-release stats are saved to stats/main.json or stats/main-<lang>.json.
 """
 import argparse
 import json
@@ -34,9 +34,14 @@ def main():
     # --- Save per-release stats file ---
     stats_dir = pathlib.Path("stats")
     stats_dir.mkdir(exist_ok=True)
-    stats_out = stats_dir / f"{args.tag}.json"
+    if args.main_lang:
+        stats_filename = f"main-{args.main_lang}.json"
+    else:
+        stats_filename = "main.json"
+
+    stats_out = stats_dir / stats_filename
     stats_out.write_text(json.dumps(counts, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    print(f"Wrote per-release stats to {stats_out}")
+    print(f"Wrote stats to {stats_out}")
 
     # --- Full language overview written to repo root (only for full release) ---
     if not args.main_lang:
@@ -54,7 +59,7 @@ def main():
 
     # --- Release notes (unified structure for both full and filtered releases) ---
     full_url = f"https://github.com/{GITHUB_REPO}/blob/main/LANGUAGES.md"
-    stats_url = f"https://github.com/{GITHUB_REPO}/blob/main/stats/{args.tag}.json"
+    stats_url = f"https://github.com/{GITHUB_REPO}/blob/main/stats/{stats_filename}"
 
     note_lines = []
 

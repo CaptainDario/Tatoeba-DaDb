@@ -54,7 +54,7 @@ uv run tatoeba_to_dadb.py --include-tags --tmp-dir ./custom_tmp --out-dir ./cust
 
 **Full production-style filtered release:**
 ```bash
-uv run tatoeba_to_dadb.py --langs eng jpn --main eng --include-tags --delete-unzipped
+uv run tatoeba_to_dadb.py --langs eng jpn --main eng --delete-unzipped
 ```
 
 ## Output Location

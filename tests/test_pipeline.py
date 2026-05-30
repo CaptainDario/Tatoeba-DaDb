@@ -139,6 +139,20 @@ def test_no_main_lang(run_no_main, case):
 
 # --- REGRESSION TESTS ---
 
+def test_no_duplicate_sentences_in_bank(run_main_eng):
+    out_dir = os.path.join("tests", "out")
+    for lang in ["eng", "jpn"]:
+        bank_path = os.path.join(out_dir, f"dict_{lang}", "example_bank_1.json")
+        if not os.path.exists(bank_path):
+            continue
+            
+        with open(bank_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            sentences = [item["sentence"] for item in data]
+            # Check for exact duplicates
+            duplicates = [s for s in set(sentences) if sentences.count(s) > 1]
+            assert not duplicates, f"Duplicate sentences found in {lang} bank: {duplicates}"
+
 def test_multiple_group_ids(run_main_eng):
     sentence_to_groups = run_main_eng
     target = "私は眠らなければなりません。"

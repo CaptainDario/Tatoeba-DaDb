@@ -8,6 +8,7 @@ import json
 import zipfile
 import shutil
 import argparse
+import unicodedata
 from collections import defaultdict
 
 # Config
@@ -246,7 +247,10 @@ def run_pipeline(target_langs, top_n, main_lang, delete_unzipped, include_tags, 
         
         # We only deduplicate sentences in the languages we are actually processing
         if not allowed_langs or lang in allowed_langs:
-            key = (lang, text)
+            # Normalize to merge visually identical sentences (e.g. different space types or widths)
+            # NFKC handles things like full-width vs half-width spaces and invisible characters
+            norm_text = unicodedata.normalize('NFKC', text)
+            key = (lang, norm_text)
             if key not in text_to_primary:
                 text_to_primary[key] = sid
             primary = text_to_primary[key]
@@ -270,16 +274,19 @@ def run_pipeline(target_langs, top_n, main_lang, delete_unzipped, include_tags, 
         pivots = {primary}
         
         # Look for pivots in main_lang (Depth 2)
-        # Hop 1
-        for n in primary_links[primary]:
-            n_lang = sid_to_lang.get(n)
-            if n_lang == main_lang:
-                pivots.add(n)
-            
-            # Hop 2 (Traverse through ANY language)
-            for nn in links.get(n, []):
-                if sid_to_lang.get(nn) == main_lang:
-                    pivots.add(nn)
+        # If the sentence is NOT in main_lang, we find its main_lang counterparts.
+        # If it IS in main_lang, we stay with its own ID to avoid UI duplication blocks.
+        if main_lang and sid_to_lang.get(primary) != main_lang:
+            # Hop 1
+            for n in primary_links[primary]:
+                n_lang = sid_to_lang.get(n)
+                if n_lang == main_lang:
+                    pivots.add(n)
+                
+                # Hop 2 (Traverse through ANY language)
+                for nn in links.get(n, []):
+                    if sid_to_lang.get(nn) == main_lang:
+                        pivots.add(nn)
         
         if len(pivots) > 1 or not main_lang:
             primary_to_groups[primary] = pivots

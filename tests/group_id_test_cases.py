@@ -1,14 +1,11 @@
-# List of test cases for the translation graph building logic
+# Two sentences share a groupId iff they're direct translations, or both directly
+# translate the same pivot. Paths via non-allowed-lang intermediates (fra/deu) don't count.
 TEST_CASES = [
     {
         "source": "Let's try something.",
-        "expected_targets": ["何かしてみましょう。", "やってみましょう。"],
-        "unexpected_targets": ["私は眠らなければなりません。", "何してるの？"]
-    },
-    {
-        "source": "何かしてみましょう。",
-        "expected_targets": ["やってみましょう。"],
-        "unexpected_targets": ["私は眠らなければなりません。", "何してるの？"]
+        "expected_targets": ["何かしてみましょう。"],
+        # やってみましょう only links via fra/deu — separate cluster.
+        "unexpected_targets": ["私は眠らなければなりません。", "何してるの？", "やってみましょう。"]
     },
     {
         "source": "I have to go to sleep.",

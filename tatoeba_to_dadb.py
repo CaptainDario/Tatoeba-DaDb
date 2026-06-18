@@ -381,7 +381,7 @@ def run_pipeline(target_langs: list[str] | None,
             for a in audio_meta.get(s, []):
                 a_tags = [t for t in (a["user"], a["lic"]) if t]
                 merged_audio.append({
-                    "url":  f"https://tatoeba.org/audio/download/{a['id']}",
+                    "source":  f"https://tatoeba.org/audio/download/{a['id']}",
                     "tags": list(dict.fromkeys(a_tags)),  # ordered dedupe
                 })
 
